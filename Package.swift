@@ -19,5 +19,9 @@ let package = Package(
             resources: [.process("Resources")]
         ),
         .testTarget(name: "QuizEngineGameTests", dependencies: ["QuizEngineGame", "QuizEngineCore"]),
+        .testTarget(
+            name: "QuizEngineMultiplayerTests",
+            dependencies: ["QuizEngineMultiplayer", "QuizEngineCore"]
+        ),
     ]
 )
