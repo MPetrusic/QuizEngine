@@ -12,13 +12,13 @@ Use the smallest product set your app needs:
 | `QuizEngineGame` | single-player and practice game state |
 | `QuizEngineMultiplayer` | optional vendor-neutral multiplayer state and wire protocol |
 
-Add the private package at the exact validated release:
+Add the public package at the exact validated release:
 
 ```swift
-.package(url: "git@github.com:MPetrusic/QuizEngine.git", exact: "0.1.1")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.1.2")
 ```
 
-Every developer and CI runner needs GitHub read access and a working SSH key, GitHub App, or deploy key. Do not put access tokens in a package URL, source file, or project file.
+No repository credentials are required. Pin an exact release tag; do not use a moving branch as a production dependency.
 
 Open [StarterQuiz](Examples/StarterQuiz/README.md) for a minimal runnable iOS app. Its [setup checklist](Docs/persistence-upgrades-troubleshooting.md#from-starterquiz-to-your-app) is the intended first integration path.
 

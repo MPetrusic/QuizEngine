@@ -11,7 +11,7 @@ Open `StarterQuiz.xcodeproj`. The project resolves QuizEngine through its local 
 In Xcode, add a package dependency with:
 
 ```swift
-.package(url: "git@github.com:MPetrusic/QuizEngine.git", exact: "0.1.1")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.1.2")
 ```
 
 Add `QuizEngineCore` and `QuizEngineGame`. Do not add `QuizEngineMultiplayer` unless the app implements a transport.
