@@ -1,0 +1,60 @@
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "Which planet is known as the Red Planet?",
+      "answers": [
+        { "text": "Mars", "correct": true },
+        { "text": "Venus", "correct": false },
+        { "text": "Jupiter", "correct": false }
+      ],
+      "categories": ["space"],
+      "difficulty": 1,
+      "description": "Iron oxide makes Mars appear red."
+    },
+    {
+      "id": 2,
+      "question": "What is the name of Earth's natural satellite?",
+      "answers": [
+        { "text": "The Moon", "correct": true },
+        { "text": "Europa", "correct": false },
+        { "text": "Titan", "correct": false }
+      ],
+      "categories": ["space"],
+      "difficulty": 1
+    },
+    {
+      "id": 3,
+      "question": "Which planet is closest to the Sun?",
+      "answers": [
+        { "text": "Mercury", "correct": true },
+        { "text": "Earth", "correct": false },
+        { "text": "Mars", "correct": false }
+      ],
+      "categories": ["space"],
+      "difficulty": 2
+    },
+    {
+      "id": 4,
+      "question": "Which process lets plants make food from light?",
+      "answers": [
+        { "text": "Photosynthesis", "correct": true },
+        { "text": "Respiration", "correct": false },
+        { "text": "Fermentation", "correct": false }
+      ],
+      "categories": ["nature"],
+      "difficulty": 1
+    },
+    {
+      "id": 5,
+      "question": "What is the largest mammal?",
+      "answers": [
+        { "text": "Blue whale", "correct": true },
+        { "text": "African elephant", "correct": false },
+        { "text": "Giraffe", "correct": false }
+      ],
+      "categories": ["nature"],
+      "difficulty": 1
+    }
+  ]
+}

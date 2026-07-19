@@ -1,0 +1,46 @@
+# Architecture and product selection
+
+QuizEngine contains game logic. An app supplies the content and platform integrations.
+
+```text
+App resources + localizations ──> QuizVariantDefinition ──> QuestionDataService
+                                                               │
+App providers ─────────────────────────────────────────> PlayerProgressManager
+                                                               │
+App SwiftUI views <──────────────────────── QuizViewModel / multiplayer view model
+```
+
+## Choose products deliberately
+
+- Every app links `QuizEngineCore`.
+- Link `QuizEngineGame` for the supplied single-player/practice state machine.
+- Link `QuizEngineMultiplayer` only when the app implements and ships multiplayer. It does not provide Game Center or nearby-device networking itself.
+
+An app can build custom views around the public Core models. It must not duplicate engine scoring, progression, or achievement logic.
+
+## App composition
+
+Create the variant once at startup, then create one question service and inject it everywhere. `PlayerProgressManager` persists to `Documents/player_progress.plist` by default.
+
+```swift
+let variant = try QuizVariantDefinition(
+    categories: MyQuizVariant.categories,
+    achievements: MyQuizVariant.achievements,
+    questionResource: .init(bundle: .main, fileName: "my_questions")
+)
+let questions = QuestionDataService(resource: variant.questionResource)
+let progress = PlayerProgressManager(
+    variant: variant,
+    questionDataService: questions,
+    analytics: MyAnalyticsAdapter(),
+    purchaseStatus: MyPurchaseStatusAdapter()
+)
+```
+
+Do not create a second `QuestionDataService` with another file or bundle. Category totals, completion, unlocks, achievements, and sessions must refer to the same content set.
+
+## Serbian Quiz is a reference, not a template
+
+`SerbianQuizVariantDefinition` shows the correct composition pattern. Its categories, achievement IDs, question resource, views, theme, Firebase/ads/StoreKit/Game Center adapters, and multiplayer transports are Serbian Quiz implementation details. New apps define all of those independently.
+
+The Serbian GameKit and MultipeerConnectivity transports are examples of app-owned implementations of the optional multiplayer boundary; they are not package dependencies.

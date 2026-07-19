@@ -1,0 +1,100 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* StarterQuizApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* StarterQuizApp.swift */; };
+		A10000000000000000000002 /* StarterQuizVariantDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* StarterQuizVariantDefinition.swift */; };
+		A10000000000000000000003 /* StarterQuizContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* StarterQuizContent.swift */; };
+		A10000000000000000000004 /* StarterQuizModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* StarterQuizModel.swift */; };
+		A10000000000000000000005 /* StarterQuizRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* StarterQuizRootView.swift */; };
+		A10000000000000000000006 /* starter_questions.json in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* starter_questions.json */; };
+		A10000000000000000000007 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* Localizable.strings */; };
+		A10000000000000000000008 /* QuizEngineCore in Frameworks */ = {isa = PBXBuildFile; productRef = A40000000000000000000001 /* QuizEngineCore */; };
+		A10000000000000000000009 /* QuizEngineGame in Frameworks */ = {isa = PBXBuildFile; productRef = A40000000000000000000002 /* QuizEngineGame */; };
+		A10000000000000000000010 /* StarterQuizContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* StarterQuizContentTests.swift */; };
+		A10000000000000000000011 /* starter_questions.json in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* starter_questions.json */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A60000000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A90000000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A30000000000000000000001; remoteInfo = StarterQuiz; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* StarterQuizApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* StarterQuizVariantDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizVariantDefinition.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* StarterQuizContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizContent.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* StarterQuizModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizModel.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* StarterQuizRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizRootView.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* starter_questions.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = starter_questions.json; sourceTree = "<group>"; };
+		A20000000000000000000007 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Localizable.strings; sourceTree = "<group>"; };
+		A20000000000000000000008 /* StarterQuizContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarterQuizContentTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* StarterQuiz.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StarterQuiz.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000010 /* StarterQuizTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StarterQuizTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A50000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000008 /* QuizEngineCore in Frameworks */, A10000000000000000000009 /* QuizEngineGame in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A50000000000000000000002 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A70000000000000000000001 = {isa = PBXGroup; children = (A70000000000000000000002 /* StarterQuiz */, A70000000000000000000003 /* StarterQuizTests */, A70000000000000000000004 /* Products */, ); sourceTree = "<group>"; };
+		A70000000000000000000002 /* StarterQuiz */ = {isa = PBXGroup; children = (A20000000000000000000001 /* StarterQuizApp.swift */, A20000000000000000000002 /* StarterQuizVariantDefinition.swift */, A20000000000000000000003 /* StarterQuizContent.swift */, A20000000000000000000004 /* StarterQuizModel.swift */, A20000000000000000000005 /* StarterQuizRootView.swift */, A70000000000000000000005 /* Resources */, ); path = StarterQuiz; sourceTree = "<group>"; };
+		A70000000000000000000003 /* StarterQuizTests */ = {isa = PBXGroup; children = (A20000000000000000000008 /* StarterQuizContentTests.swift */, ); path = StarterQuizTests; sourceTree = "<group>"; };
+		A70000000000000000000004 /* Products */ = {isa = PBXGroup; children = (A20000000000000000000009 /* StarterQuiz.app */, A20000000000000000000010 /* StarterQuizTests.xctest */, ); name = Products; sourceTree = "<group>"; };
+		A70000000000000000000005 /* Resources */ = {isa = PBXGroup; children = (A20000000000000000000006 /* starter_questions.json */, A20000000000000000000007 /* Localizable.strings */, ); path = Resources; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A30000000000000000000001 /* StarterQuiz */ = {isa = PBXNativeTarget; buildConfigurationList = AA00000000000000000000001 /* Build configuration list for PBXNativeTarget "StarterQuiz" */; buildPhases = (A50000000000000000000003 /* Sources */, A50000000000000000000001 /* Frameworks */, A50000000000000000000004 /* Resources */, ); buildRules = (); dependencies = (); name = StarterQuiz; packageProductDependencies = (A40000000000000000000001 /* QuizEngineCore */, A40000000000000000000002 /* QuizEngineGame */, ); productName = StarterQuiz; productReference = A20000000000000000000009 /* StarterQuiz.app */; productType = "com.apple.product-type.application"; };
+		A30000000000000000000002 /* StarterQuizTests */ = {isa = PBXNativeTarget; buildConfigurationList = AA00000000000000000000002 /* Build configuration list for PBXNativeTarget "StarterQuizTests" */; buildPhases = (A50000000000000000000005 /* Sources */, A50000000000000000000002 /* Frameworks */, A50000000000000000000006 /* Resources */, ); buildRules = (); dependencies = (A80000000000000000000001 /* PBXTargetDependency */, ); name = StarterQuizTests; productName = StarterQuizTests; productReference = A20000000000000000000010 /* StarterQuizTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A90000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {A30000000000000000000001 = {CreatedOnToolsVersion = 16.0;}; A30000000000000000000002 = {CreatedOnToolsVersion = 16.0; TestTargetID = A30000000000000000000001;};};}; buildConfigurationList = AA00000000000000000000003 /* Build configuration list for PBXProject "StarterQuiz" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = A70000000000000000000001; packageReferences = (A40000000000000000000003 /* XCLocalSwiftPackageReference "../.." */, ); productRefGroup = A70000000000000000000004 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A30000000000000000000001 /* StarterQuiz */, A30000000000000000000002 /* StarterQuizTests */, ); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A50000000000000000000004 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000006 /* starter_questions.json in Resources */, A10000000000000000000007 /* Localizable.strings in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A50000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000011 /* starter_questions.json in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A50000000000000000000003 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* StarterQuizApp.swift in Sources */, A10000000000000000000002 /* StarterQuizVariantDefinition.swift in Sources */, A10000000000000000000003 /* StarterQuizContent.swift in Sources */, A10000000000000000000004 /* StarterQuizModel.swift in Sources */, A10000000000000000000005 /* StarterQuizRootView.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A50000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000010 /* StarterQuizContentTests.swift in Sources */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A80000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A30000000000000000000001 /* StarterQuiz */; targetProxy = A60000000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AB00000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0;}; name = Debug; };
+		AB00000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0;}; name = Release; };
+		AB00000000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = ""; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = ""; ENABLE_TESTABILITY = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.QuizEngineStarter; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
+		AB00000000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = ""; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.QuizEngineStarter; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
+		AB00000000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.QuizEngineStarterTests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StarterQuiz.app/StarterQuiz"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug; };
+		AB00000000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.QuizEngineStarterTests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/StarterQuiz.app/StarterQuiz"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA00000000000000000000001 /* Build configuration list for PBXNativeTarget "StarterQuiz" */ = {isa = XCConfigurationList; buildConfigurations = (AB00000000000000000000003 /* Debug */, AB00000000000000000000004 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		AA00000000000000000000002 /* Build configuration list for PBXNativeTarget "StarterQuizTests" */ = {isa = XCConfigurationList; buildConfigurations = (AB00000000000000000000005 /* Debug */, AB00000000000000000000006 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		AA00000000000000000000003 /* Build configuration list for PBXProject "StarterQuiz" */ = {isa = XCConfigurationList; buildConfigurations = (AB00000000000000000000001 /* Debug */, AB00000000000000000000002 /* Release */, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A40000000000000000000003 /* XCLocalSwiftPackageReference "../.." */ = {isa = XCLocalSwiftPackageReference; relativePath = ../..; };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A40000000000000000000001 /* QuizEngineCore */ = {isa = XCSwiftPackageProductDependency; package = A40000000000000000000003 /* XCLocalSwiftPackageReference "../.." */; productName = QuizEngineCore; };
+		A40000000000000000000002 /* QuizEngineGame */ = {isa = XCSwiftPackageProductDependency; package = A40000000000000000000003 /* XCLocalSwiftPackageReference "../.." */; productName = QuizEngineGame; };
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A90000000000000000000001 /* Project object */;
+}
