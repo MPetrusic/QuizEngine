@@ -9,7 +9,7 @@ if rg -n 'Bundle\.main|AppContainer|QuizConfiguration|Срб|SerbianQuiz|MilosPe
     exit 1
 fi
 
-if rg -n '^import (Firebase|FirebaseCore|FirebaseAnalytics|GoogleMobileAds|StoreKit)' "$sources"; then
+if rg -n '^(@preconcurrency )?import (Firebase|FirebaseCore|FirebaseAnalytics|GoogleMobileAds|StoreKit|GameKit|MultipeerConnectivity)' "$sources"; then
     echo "Package imports an app-owned vendor SDK" >&2
     exit 1
 fi

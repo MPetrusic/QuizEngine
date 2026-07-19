@@ -4,7 +4,6 @@
 //
 
 import Foundation
-@preconcurrency import GameKit
 
 public enum LobbyConnectionState: Sendable {
     case idle
@@ -110,14 +109,17 @@ public final class MultiplayerConnectionManager: ObservableObject {
         connectionState = .idle
     }
 
-    /// Accepts an incoming GKInvite directly (from the global invite handler).
-    /// This is used when the user taps a Game Center invite notification.
-    public func acceptIncomingInvite(_ invite: GKInvite, using transport: GameKitTransport) {
+    /// Attaches a transport for an app-owned inbound connection flow.
+    /// The package intentionally does not know which SDK supplied the invitation.
+    public func startConnecting(
+        using transport: any MultiplayerTransport,
+        prepareTransport: () -> Void
+    ) {
         stopSearching()
         self.transport = transport
-        transport.acceptInvite(invite)
         connectionState = .connecting
         startListening()
+        prepareTransport()
     }
 
     // MARK: - Private

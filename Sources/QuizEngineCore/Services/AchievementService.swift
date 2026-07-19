@@ -3,9 +3,11 @@ import Foundation
 @MainActor
 public final class AchievementService {
     public let definitions: [AchievementDefinition]
+    private let categoryIDs: Set<String>
 
-    public init(definitions: [AchievementDefinition]) {
-        self.definitions = definitions
+    public init(variant: QuizVariantDefinition) {
+        self.definitions = variant.achievements
+        self.categoryIDs = Set(variant.categories.map(\.id))
     }
 
     public func checkAchievements(
@@ -91,16 +93,17 @@ public final class AchievementService {
     }
 
     private func correctCount(_ categoryID: String, _ progress: PlayerProgress) -> Int {
-        progress.categoryStats[categoryID]?.correctlyAnsweredIDs.count ?? 0
+        guard categoryIDs.contains(categoryID) else { return 0 }
+        return progress.categoryStats[categoryID]?.correctlyAnsweredIDs.count ?? 0
     }
 
     private func bestCategoryCorrectCount(_ progress: PlayerProgress) -> Int {
-        progress.categoryStats.values.map { $0.correctlyAnsweredIDs.count }.max() ?? 0
+        categoryIDs.map { correctCount($0, progress) }.max() ?? 0
     }
 
     private func categoriesMeeting(_ minimum: Int, _ progress: PlayerProgress) -> [String] {
-        progress.categoryStats.compactMap { id, stat in
-            stat.correctlyAnsweredIDs.count >= minimum ? id : nil
+        categoryIDs.filter { id in
+            correctCount(id, progress) >= minimum
         }
     }
 }

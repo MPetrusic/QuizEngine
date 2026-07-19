@@ -7,18 +7,6 @@ final class QuizEngineCoreTests: XCTestCase {
         QuestionDataService(bundle: .module, fileName: "alternate_questions")
     }
 
-    private var alternateVariant: QuizVariantDefinition {
-        QuizVariantDefinition(
-            categories: [
-                .init(id: "space", displayNameKey: "category.space", iconName: "moon", displayOrder: 1, unlockRequirement: .coins(amount: 25)),
-                .init(id: "nature", displayNameKey: "category.nature", iconName: "leaf", displayOrder: 0, unlockRequirement: .free),
-                .init(id: "future", displayNameKey: "category.future", iconName: "sparkles", displayOrder: 2, unlockRequirement: .categoryCompletion(categoryID: "nature", percentage: 50))
-            ],
-            achievements: achievementRules,
-            questionResource: QuestionResource(bundle: .module, fileName: "alternate_questions")
-        )
-    }
-
     private var achievementRules: [AchievementDefinition] {
         [
             .init(id: "streak", type: .streak, coinReward: 1, rule: .playStreak(minimum: 3)),
@@ -37,6 +25,22 @@ final class QuizEngineCoreTests: XCTestCase {
         ]
     }
 
+    private func makeAlternateVariant(
+        categories: [QuizCategoryDefinition]? = nil,
+        achievements: [AchievementDefinition]? = nil,
+        fileName: String = "alternate_questions"
+    ) throws -> QuizVariantDefinition {
+        try QuizVariantDefinition(
+            categories: categories ?? [
+                .init(id: "space", displayNameKey: "category.space", iconName: "moon", displayOrder: 1, unlockRequirement: .coins(amount: 25)),
+                .init(id: "nature", displayNameKey: "category.nature", iconName: "leaf", displayOrder: 0, unlockRequirement: .free),
+                .init(id: "future", displayNameKey: "category.future", iconName: "sparkles", displayOrder: 2, unlockRequirement: .categoryCompletion(categoryID: "nature", percentage: 50))
+            ],
+            achievements: achievements ?? achievementRules,
+            questionResource: QuestionResource(bundle: .module, fileName: fileName)
+        )
+    }
+
     func testExplicitQuestionResourceLoadsAlternateFile() throws {
         let data = try service.getQuestionData()
         XCTAssertEqual(data.questions.count, 3)
@@ -53,50 +57,115 @@ final class QuizEngineCoreTests: XCTestCase {
         }
     }
 
-    func testVariantSortsCategoriesAndSupportsDifferentIdentifiers() {
-        XCTAssertEqual(alternateVariant.categories.map(\.id), ["nature", "space", "future"])
-        XCTAssertEqual(alternateVariant.category(id: "SPACE")?.coinCost, 25)
-        XCTAssertNil(alternateVariant.category(id: "history"))
+    func testVariantSortsCategoriesAndSupportsDifferentIdentifiers() throws {
+        let variant = try makeAlternateVariant()
+        XCTAssertEqual(variant.categories.map(\.id), ["nature", "space", "future"])
+        XCTAssertEqual(variant.category(id: "SPACE")?.coinCost, 25)
+        XCTAssertNil(variant.category(id: "history"))
     }
 
-    func testGenericAchievementEvaluatorCoversEveryRule() {
-        var progress = PlayerProgress.default
-        progress.longestPlayStreak = 3
-        progress.currentPlayStreak = 3
-        progress.bestSingleSessionScore = 100
-        progress.bestSingleSessionStreak = 5
-        progress.categoryStats = [
-            "nature": CategoryStat(correctlyAnsweredIDs: [1, 2]),
-            "space": CategoryStat(correctlyAnsweredIDs: [3, 4])
+    func testVariantValidationRejectsInvalidConfiguration() throws {
+        let duplicate = try makeAlternateVariant().categories + [
+            .init(id: "nature", displayNameKey: "category.duplicate", iconName: "leaf", displayOrder: 3, unlockRequirement: .free)
         ]
-        progress.lifetimeGamesPlayed = 10
-        progress.lifetimeQuestionsAnswered = 20
-        progress.totalCoinsEarned = 30
-        progress.powerUpTypesUsed = ["a", "b"]
-        progress.lifetimePowerUpsUsed = 4
+        XCTAssertThrowsError(try makeAlternateVariant(categories: duplicate)) { error in
+            XCTAssertEqual(error as? QuizVariantValidationError, .duplicateCategoryID("nature"))
+        }
 
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let now = calendar.date(from: DateComponents(year: 2026, month: 7, day: 12, hour: 2))!
-        progress.previousAppOpenDate = calendar.date(byAdding: .day, value: -31, to: now)
+        let duplicateOrder = [
+            QuizCategoryDefinition(id: "nature", displayNameKey: "category.nature", iconName: "leaf", displayOrder: 0, unlockRequirement: .free),
+            QuizCategoryDefinition(id: "space", displayNameKey: "category.space", iconName: "moon", displayOrder: 0, unlockRequirement: .free)
+        ]
+        XCTAssertThrowsError(try makeAlternateVariant(categories: duplicateOrder)) { error in
+            XCTAssertEqual(error as? QuizVariantValidationError, .duplicateCategoryDisplayOrder(0))
+        }
 
-        let service = AchievementService(definitions: achievementRules)
-        let unlocked = service.checkAchievements(progress: progress, date: now, calendar: calendar)
-        XCTAssertEqual(Set(unlocked.map(\.id)), Set(achievementRules.map(\.id)))
-        XCTAssertEqual(service.getProgress(for: achievementRules[5], progress: progress)?.current, 2)
+        let invalidUnlock = [
+            QuizCategoryDefinition(id: "nature", displayNameKey: "category.nature", iconName: "leaf", displayOrder: 0, unlockRequirement: .categoryCompletion(categoryID: "missing", percentage: 50))
+        ]
+        XCTAssertThrowsError(try makeAlternateVariant(categories: invalidUnlock))
+
+        let invalidAchievement = [
+            AchievementDefinition(id: "missing_category", type: .category, coinReward: 1, rule: .categoryCorrect(categoryID: "missing", minimum: 1))
+        ]
+        XCTAssertThrowsError(try makeAlternateVariant(achievements: invalidAchievement))
+        XCTAssertThrowsError(try makeAlternateVariant(fileName: " "))
     }
 
-    func testCategoryUnlockRulesUseVariantDefinitions() throws {
+    func testEveryAchievementRuleUnlocksAtExactAndAboveThresholdAndReportsProgress() throws {
+        let variant = try makeAlternateVariant()
+        let achievementService = AchievementService(variant: variant)
+        let calendar = utcCalendar
+        let outsideNightWindow = date(hour: 12, calendar: calendar)
+
+        for definition in variant.achievements {
+            XCTAssertFalse(
+                achievementService.checkAchievements(
+                    progress: belowThresholdProgress,
+                    date: outsideNightWindow,
+                    calendar: calendar
+                ).contains(where: { $0.id == definition.id }),
+                "Expected \(definition.id) to remain locked below threshold"
+            )
+
+            let exact = progress(for: definition.rule, increase: 0, date: outsideNightWindow, calendar: calendar)
+            let exactDate = evaluationDate(for: definition.rule, calendar: calendar, above: false)
+            XCTAssertTrue(
+                achievementService.checkAchievements(progress: exact, date: exactDate, calendar: calendar)
+                    .contains(where: { $0.id == definition.id }),
+                "Expected \(definition.id) to unlock at threshold"
+            )
+
+            let above = progress(for: definition.rule, increase: 1, date: outsideNightWindow, calendar: calendar)
+            let aboveDate = evaluationDate(for: definition.rule, calendar: calendar, above: true)
+            XCTAssertTrue(
+                achievementService.checkAchievements(progress: above, date: aboveDate, calendar: calendar)
+                    .contains(where: { $0.id == definition.id }),
+                "Expected \(definition.id) to unlock above threshold"
+            )
+
+            if let progress = achievementService.getProgress(for: definition, progress: exact) {
+                XCTAssertEqual(progress.current, progress.target, "Expected exact progress for \(definition.id)")
+            } else {
+                switch definition.rule {
+                case .comeback, .localHour:
+                    break
+                default:
+                    XCTFail("Expected numeric progress for \(definition.id)")
+                }
+            }
+        }
+    }
+
+    func testAchievementRulesIgnoreStaleCategoryProgress() throws {
+        let variant = try makeAlternateVariant()
+        let service = AchievementService(variant: variant)
+        var progress = PlayerProgress.default
+        progress.categoryStats = [
+            "stale": CategoryStat(correctlyAnsweredIDs: Set(1...100)),
+            "nature": CategoryStat(correctlyAnsweredIDs: [1])
+        ]
+
+        let anyCategory = AchievementDefinition(id: "any", type: .category, coinReward: 1, rule: .anyCategoryCorrect(minimum: 2))
+        let categories = AchievementDefinition(id: "categories", type: .category, coinReward: 1, rule: .categoriesCorrect(categoryCount: 2, minimumPerCategory: 1))
+        XCTAssertEqual(service.getProgress(for: anyCategory, progress: progress)?.current, 1)
+        XCTAssertEqual(service.getProgress(for: categories, progress: progress)?.current, 1)
+    }
+
+    func testCategoryUnlockRulesUseVariantDefinitionsAndRejectUnknownPremiumIDs() throws {
+        let variant = try makeAlternateVariant()
         let manager = PlayerProgressManager(
-            variant: alternateVariant,
+            variant: variant,
             questionDataService: service,
+            purchaseStatus: PremiumPurchaseStatus(),
             persistenceURL: try temporaryProgressURL()
         )
 
         XCTAssertTrue(manager.isCategoryUnlocked("nature"))
-        XCTAssertFalse(manager.isCategoryUnlocked("space"))
+        XCTAssertTrue(manager.isCategoryUnlocked("space"))
         XCTAssertFalse(manager.isCategoryUnlocked("unknown"))
-        XCTAssertEqual(manager.getUnlockProgress(for: "space", totalQuestionsInCategory: 1).coinCost, 25)
+        XCTAssertEqual(manager.getUnlockProgress(for: "space").coinCost, 25)
+        XCTAssertFalse(manager.getUnlockProgress(for: "unknown").isUnlocked)
     }
 
     func testLegacyProgressPlistPreservesStoredIdentifiersAndDefaultsNewFields() throws {
@@ -116,10 +185,78 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertEqual(decoded.multiplayerGamesPlayed, 0)
     }
 
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private func date(hour: Int, calendar: Calendar) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 7, day: 12, hour: hour))!
+    }
+
+    private func evaluationDate(for rule: AchievementRule, calendar: Calendar, above: Bool) -> Date {
+        if case .localHour(let start, let end) = rule {
+            return date(hour: above && start + 1 < end ? start + 1 : start, calendar: calendar)
+        }
+        return date(hour: 12, calendar: calendar)
+    }
+
+    private func progress(
+        for rule: AchievementRule,
+        increase: Int,
+        date: Date,
+        calendar: Calendar
+    ) -> PlayerProgress {
+        var progress = PlayerProgress.default
+        switch rule {
+        case .playStreak(let minimum):
+            progress.currentPlayStreak = minimum + increase
+            progress.longestPlayStreak = minimum + increase
+        case .bestScore(let minimum): progress.bestSingleSessionScore = minimum + increase
+        case .bestAnswerStreak(let minimum): progress.bestSingleSessionStreak = minimum + increase
+        case .anyCategoryCorrect(let minimum): progress.categoryStats["nature"] = CategoryStat(correctlyAnsweredIDs: Set(1...(minimum + increase)))
+        case .categoryCorrect(let categoryID, let minimum): progress.categoryStats[categoryID] = CategoryStat(correctlyAnsweredIDs: Set(1...(minimum + increase)))
+        case .categoriesCorrect(let count, let minimum):
+            for categoryID in ["nature", "space", "future"].prefix(count) {
+                progress.categoryStats[categoryID] = CategoryStat(correctlyAnsweredIDs: Set(1...(minimum + increase)))
+            }
+        case .lifetimeGames(let minimum): progress.lifetimeGamesPlayed = minimum + increase
+        case .lifetimeQuestions(let minimum): progress.lifetimeQuestionsAnswered = minimum + increase
+        case .totalCoinsEarned(let minimum): progress.totalCoinsEarned = minimum + increase
+        case .powerUpTypesUsed(let minimum): progress.powerUpTypesUsed = Set((0..<(minimum + increase)).map(String.init))
+        case .lifetimePowerUpsUsed(let minimum): progress.lifetimePowerUpsUsed = minimum + increase
+        case .comeback(let minimumDaysAway): progress.previousAppOpenDate = calendar.date(byAdding: .day, value: -(minimumDaysAway + increase), to: date)
+        case .localHour: break
+        }
+        return progress
+    }
+
+    private var belowThresholdProgress: PlayerProgress {
+        var progress = PlayerProgress.default
+        progress.currentPlayStreak = 0
+        progress.longestPlayStreak = 0
+        progress.bestSingleSessionScore = 0
+        progress.bestSingleSessionStreak = 0
+        progress.categoryStats = [:]
+        progress.lifetimeGamesPlayed = 0
+        progress.lifetimeQuestionsAnswered = 0
+        progress.totalCoinsEarned = 0
+        progress.powerUpTypesUsed = []
+        progress.lifetimePowerUpsUsed = 0
+        progress.previousAppOpenDate = nil
+        return progress
+    }
+
     private func temporaryProgressURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("player_progress.plist")
     }
+}
+
+private final class PremiumPurchaseStatus: PurchaseStatusProvider {
+    let isPremium = true
+    let adsRemoved = true
 }

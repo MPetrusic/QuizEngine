@@ -422,7 +422,7 @@ public class QuizViewModel: ObservableObject {
             progressManager?.checkAndUnlockAchievements()
         }
 
-        // Submit score to GameKit leaderboard immediately when game ends
+        // Submit score to the app-provided leaderboard immediately when game ends
         // Only for competitive mode (all categories) - this ensures correct timestamps
         // for daily/weekly leaderboard filtering
         if isCompetitiveMode {

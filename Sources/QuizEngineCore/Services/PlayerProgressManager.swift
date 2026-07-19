@@ -32,7 +32,7 @@ public class PlayerProgressManager: ObservableObject {
     ) {
         self.variant = variant
         self.questionDataService = questionDataService
-        self.achievementService = AchievementService(definitions: variant.achievements)
+        self.achievementService = AchievementService(variant: variant)
         self.analytics = analytics
         self.purchaseStatus = purchaseStatus
         self.persistenceURL = persistenceURL ?? Self.plistURL
@@ -586,37 +586,30 @@ public class PlayerProgressManager: ObservableObject {
     /// - Parameter categoryID: The category identifier (lowercase English)
     /// - Returns: true if the category is playable
     public func isCategoryUnlocked(_ categoryID: String) -> Bool {
+        let normalizedID = categoryID.lowercased()
+        guard let requirement = variant.category(id: normalizedID)?.unlockRequirement else {
+            return false
+        }
+
         // Premium users have all categories unlocked
         if purchaseStatus?.isPremium ?? false {
             return true
         }
-
-        let normalizedID = categoryID.lowercased()
 
         // Check if manually unlocked (purchased with coins)
         if progress.manuallyUnlockedCategories.contains(normalizedID) {
             return true
         }
 
-        // Evaluate unlock requirement
-        guard let requirement = variant.category(id: normalizedID)?.unlockRequirement else {
-            return false
-        }
         return evaluateRequirement(requirement)
     }
 
     /// Gets the unlock progress for a category
     /// - Parameters:
     ///   - categoryID: The category identifier
-    ///   - totalQuestionsInCategory: Total questions in this category (for completion %)
     /// - Returns: UnlockProgress with current state and progress info
-    public func getUnlockProgress(for categoryID: String, totalQuestionsInCategory: Int) -> UnlockProgress {
+    public func getUnlockProgress(for categoryID: String) -> UnlockProgress {
         let normalizedID = categoryID.lowercased()
-
-        // Already manually unlocked
-        if progress.manuallyUnlockedCategories.contains(normalizedID) {
-            return .unlocked()
-        }
 
         guard let requirement = variant.category(id: normalizedID)?.unlockRequirement else {
             return UnlockProgress(
@@ -626,6 +619,11 @@ public class PlayerProgressManager: ObservableObject {
                 targetValue: 0,
                 coinCost: nil
             )
+        }
+
+        // Already manually unlocked
+        if progress.manuallyUnlockedCategories.contains(normalizedID) {
+            return .unlocked()
         }
 
         // Free categories

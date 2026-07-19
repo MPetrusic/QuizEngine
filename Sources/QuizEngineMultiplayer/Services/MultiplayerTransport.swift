@@ -8,21 +8,21 @@ import QuizEngineCore
 
 // MARK: - Technology Limitations
 //
-// 1. GameKit has no host migration. If the host disconnects, the game must end.
+// 1. The host transport has no host migration. If the host disconnects, the game must end.
 //    There is no way to promote a guest to host mid-session.
 //
-// 2. MultipeerConnectivity does not guarantee message ordering even with .reliable mode.
+// 2. A transport may not guarantee message ordering even in reliable mode.
 //    Messages sent sequentially may arrive out of order.
 //
 // 3. Neither transport supports true reconnection to the same session.
 //    "Reconnecting" means hoping the existing connection recovers within the grace period.
 //    If it doesn't, the game ends.
 //
-// 4. GameKit sendData(toAllPlayers:) has a payload size limit (~87KB for reliable).
-//    Question payloads should be monitored if the question set grows.
+// 4. Transport payloads can be bounded. Question payloads should be monitored if
+//    the question set grows.
 //
-// 5. MCSession does not support background execution. When both players background,
-//    the connection will be lost within the heartbeat timeout window.
+// 5. A transport may not support background execution. When both players background,
+//    the connection can be lost within the heartbeat timeout window.
 //
 
 // MARK: - Player & Role
