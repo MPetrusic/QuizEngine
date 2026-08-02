@@ -1,5 +1,6 @@
 import XCTest
 import QuizEngineCore
+import QuizEngineTestSupport
 @testable import QuizEngineGame
 
 @MainActor
@@ -54,5 +55,46 @@ final class QuizEngineGameTests: XCTestCase {
         XCTAssertEqual(viewModel.livesRemaining, 3)
         XCTAssertEqual(viewModel.questionsAnsweredThisSession, 1)
         XCTAssertEqual(viewModel.missedQuestions.map(\.id), [1])
+    }
+
+    func testDelayedQuestionTransitionUsesInjectedScheduler() {
+        let scheduler = TestScheduler()
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: scheduler,
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 1)
+        )
+        viewModel.stopTimer()
+
+        viewModel.increaseScoreForCorrectAnswer()
+        XCTAssertEqual(viewModel.questionNumber, 0)
+
+        scheduler.advance(by: 1)
+
+        XCTAssertEqual(viewModel.questionNumber, 1)
+    }
+
+    func testFakeProvidersAreInjectableWithoutExternalServices() {
+        let analytics = RecordingAnalytics()
+        let haptics = RecordingHaptics()
+        let purchaseStatus = FakePurchaseStatus()
+        let interstitial = FakeInterstitialAdProvider(ready: true)
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            analytics: analytics,
+            interstitialAd: interstitial,
+            purchaseStatus: purchaseStatus,
+            haptics: haptics,
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 2)
+        )
+        viewModel.stopTimer()
+
+        XCTAssertEqual(analytics.gameStarts.count, 1)
+        XCTAssertEqual(interstitial.loadCount, 1)
+        XCTAssertTrue(haptics.notifications.isEmpty)
     }
 }

@@ -13,10 +13,11 @@ public class UserPreferencesLoader {
         return documents.appendingPathComponent("user_preferences.plist")
     }
 
-    public static func load() -> UserPreferences {
+    public static func load(from url: URL? = nil) -> UserPreferences {
         let decoder = PropertyListDecoder()
+        let sourceURL = url ?? plistURL
 
-        guard let data = try? Data.init(contentsOf: plistURL),
+        guard let data = try? Data(contentsOf: sourceURL),
               let preferences = try? decoder.decode(UserPreferences.self, from: data)
         else {
             return UserPreferences(hapticsEnabled: true)
@@ -25,14 +26,15 @@ public class UserPreferencesLoader {
         return preferences
     }
 
-    public static func write(preferences: UserPreferences) {
+    public static func write(preferences: UserPreferences, to url: URL? = nil) {
         let encoder = PropertyListEncoder()
+        let destinationURL = url ?? plistURL
 
         if let data = try? encoder.encode(preferences) {
-            if FileManager.default.fileExists(atPath: plistURL.path) {
-                try? data.write(to: plistURL)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                try? data.write(to: destinationURL)
             } else {
-                FileManager.default.createFile(atPath: plistURL.path, contents: data, attributes: nil)
+                FileManager.default.createFile(atPath: destinationURL.path, contents: data, attributes: nil)
             }
         }
     }

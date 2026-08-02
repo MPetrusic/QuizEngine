@@ -124,12 +124,14 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private let interstitialAd: (any InterstitialAdProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
 
-    private var timerTask: Task<Void, Never>?
-    private var roundAdvanceTask: Task<Void, Never>?
-    private var gameConfigRetryTask: Task<Void, Never>?
+    private var timerTask: (any QuizEngineScheduledTask)?
+    private var roundAdvanceTask: (any QuizEngineScheduledTask)?
+    private var gameConfigRetryTask: (any QuizEngineScheduledTask)?
     private var cancellables = Set<AnyCancellable>()
     private var seed: UInt64 = 0
-    private var rng: SeededRandomNumberGenerator?
+    private var randomNumberGenerator: any RandomNumberGenerator
+    private let clock: any QuizEngineClock
+    private let scheduler: any QuizEngineScheduler
     private var matchStartTime: Date?
 
     // Host-only timing
@@ -145,12 +147,18 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         gameCoordinator: MultiplayerGameCoordinator,
         analytics: (any AnalyticsProvider)? = nil,
         interstitialAd: (any InterstitialAdProvider)? = nil,
-        purchaseStatus: (any PurchaseStatusProvider)? = nil
+        purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
     ) {
         self.gameCoordinator = gameCoordinator
         self.analytics = analytics
         self.interstitialAd = interstitialAd
         self.purchaseStatus = purchaseStatus
+        self.clock = clock
+        self.scheduler = scheduler
+        self.randomNumberGenerator = randomNumberGenerator
         self.isHost = gameCoordinator.role == .host
         self.opponentDisplayName = gameCoordinator.opponent?.displayName ?? String(localized: "multiplayer_quiz_view_model.opponent.fallback_name")
         interstitialAd?.load()
@@ -162,9 +170,8 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     public func setupAsHost(questions: [Question], localDisplayName: String) {
         self.questions = questions
         self.myDisplayName = localDisplayName
-        self.seed = UInt64.random(in: 1...UInt64.max)
-        self.rng = SeededRandomNumberGenerator(seed: seed)
-        self.matchStartTime = Date()
+        self.seed = UInt64.random(in: 1...UInt64.max, using: &randomNumberGenerator)
+        self.matchStartTime = clock.now
 
         let config = GameConfigPayload(questions: questions, seed: seed)
         sendGameConfigWithRetry(config)
@@ -182,14 +189,28 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         try? gameCoordinator.transport?.send(message: .gameConfig(config))
 
         gameConfigRetryTask?.cancel()
-        gameConfigRetryTask = Task { [weak self] in
-            for attempt in 1...maxRetries {
-                try? await Task.sleep(for: .milliseconds(retryDelayMs * attempt))
-                guard !Task.isCancelled, let self, !self.isGameOver else { return }
-                if self.gameCoordinator.opponentReady { return }
-                print("[MultiplayerQuizViewModel] Host re-sending gameConfig (retry \(attempt)/\(maxRetries))")
-                try? self.gameCoordinator.transport?.send(message: .gameConfig(config))
-            }
+        scheduleGameConfigRetry(config, attempt: 1, maxRetries: maxRetries, retryDelayMs: retryDelayMs)
+    }
+
+    private func scheduleGameConfigRetry(
+        _ config: GameConfigPayload,
+        attempt: Int,
+        maxRetries: Int,
+        retryDelayMs: Int
+    ) {
+        guard attempt <= maxRetries else { return }
+        gameConfigRetryTask = scheduler.schedule(
+            after: TimeInterval(retryDelayMs * attempt) / 1000
+        ) { [weak self] in
+            guard let self, !self.isGameOver, !self.gameCoordinator.opponentReady else { return }
+            print("[MultiplayerQuizViewModel] Host re-sending gameConfig (retry \(attempt)/\(maxRetries))")
+            try? self.gameCoordinator.transport?.send(message: .gameConfig(config))
+            self.scheduleGameConfigRetry(
+                config,
+                attempt: attempt + 1,
+                maxRetries: maxRetries,
+                retryDelayMs: retryDelayMs
+            )
         }
     }
 
@@ -211,9 +232,8 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
         self.questions = config.questions
         self.seed = config.seed
-        self.rng = SeededRandomNumberGenerator(seed: seed)
         self.myDisplayName = localDisplayName
-        self.matchStartTime = Date()
+        self.matchStartTime = clock.now
 
         print("[MultiplayerQuizViewModel] questions.count = \(self.questions.count), calling loadCurrentQuestion")
         loadCurrentQuestion()
@@ -253,7 +273,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     public func startRound() {
         timeRemainingMs = Self.timerDurationMs
         timerActive = true
-        questionStartTime = Date()
+        questionStartTime = clock.now
         gameCoordinator.transitionToPlaying()
         startTimer()
     }
@@ -276,7 +296,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
         if isHost {
             hostAnswer = payload
-            hostAnswerTime = Date()
+            hostAnswerTime = clock.now
         }
 
         gameCoordinator.sendAnswer(payload)
@@ -423,9 +443,8 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
         // Auto-advance after display duration
         roundAdvanceTask?.cancel()
-        roundAdvanceTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.roundResultDisplayDurationSeconds))
-            guard !Task.isCancelled, let self, self.showingRoundResult else { return }
+        roundAdvanceTask = scheduler.schedule(after: Self.roundResultDisplayDurationSeconds) { [weak self] in
+            guard let self, self.showingRoundResult else { return }
             self.advanceToNextQuestion()
         }
     }
@@ -491,7 +510,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         case .none: return
         }
 
-        let duration = matchStartTime.map { Int(Date().timeIntervalSince($0)) } ?? 0
+        let duration = matchStartTime.map { Int(clock.now.timeIntervalSince($0)) } ?? 0
 
         analytics?.logMultiplayerMatchCompleted(
             result: resultString,
@@ -538,20 +557,22 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         timerTask?.cancel()
         timerActive = true
         guard let startTime = questionStartTime else { return }
-        timerTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(Self.timerTickMs))
-                guard !Task.isCancelled, let self, self.timerActive else { return }
-                let elapsedMs = Int(Date().timeIntervalSince(startTime) * 1000)
-                let remaining = Self.timerDurationMs - elapsedMs
-                if remaining <= 0 {
-                    self.timeRemainingMs = 0
-                    self.timerActive = false
-                    self.handleTimeout()
-                    return
-                }
-                self.timeRemainingMs = remaining
+        scheduleTimerTick(from: startTime)
+    }
+
+    private func scheduleTimerTick(from startTime: Date) {
+        timerTask = scheduler.schedule(after: TimeInterval(Self.timerTickMs) / 1000) { [weak self] in
+            guard let self, self.timerActive else { return }
+            let elapsedMs = Int(self.clock.now.timeIntervalSince(startTime) * 1000)
+            let remaining = Self.timerDurationMs - elapsedMs
+            if remaining <= 0 {
+                self.timeRemainingMs = 0
+                self.timerActive = false
+                self.handleTimeout()
+                return
             }
+            self.timeRemainingMs = remaining
+            self.scheduleTimerTick(from: startTime)
         }
     }
 
@@ -612,7 +633,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
                 if self.isHost {
                     self.guestAnswer = answer
-                    self.guestAnswerTime = Date()
+                    self.guestAnswerTime = self.clock.now
                     if self.hostAnswer != nil {
                         self.handleBothAnswersReceived(opponentAnswer: answer)
                     }
@@ -721,7 +742,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         guard !(purchaseStatus?.isPremium ?? false),
               !(purchaseStatus?.adsRemoved ?? false),
               isAdReady(),
-              Int.random(in: 0...1) == 0 else { return }
+              Int.random(in: 0...1, using: &randomNumberGenerator) == 0 else { return }
         showInterstitialAd()
     }
 

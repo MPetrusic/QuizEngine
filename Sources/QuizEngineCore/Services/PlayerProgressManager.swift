@@ -17,6 +17,8 @@ public class PlayerProgressManager: ObservableObject {
     private let analytics: (any AnalyticsProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
     private let persistenceURL: URL
+    private let clock: any QuizEngineClock
+    private let calendar: Calendar
 
     private static var plistURL: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -28,7 +30,9 @@ public class PlayerProgressManager: ObservableObject {
         questionDataService: QuestionDataService,
         analytics: (any AnalyticsProvider)? = nil,
         purchaseStatus: (any PurchaseStatusProvider)? = nil,
-        persistenceURL: URL? = nil
+        persistenceURL: URL? = nil,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        calendar: Calendar = .current
     ) {
         self.variant = variant
         self.questionDataService = questionDataService
@@ -36,6 +40,8 @@ public class PlayerProgressManager: ObservableObject {
         self.analytics = analytics
         self.purchaseStatus = purchaseStatus
         self.persistenceURL = persistenceURL ?? Self.plistURL
+        self.clock = clock
+        self.calendar = calendar
         self.progress = Self.load(from: persistenceURL ?? Self.plistURL)
     }
 
@@ -97,12 +103,14 @@ public class PlayerProgressManager: ObservableObject {
     // MARK: - Streak Operations
 
     public func handleAppOpen() {
-        progress.updateStreakOnAppOpen()
+        let now = clock.now
+        progress.updateStreakOnAppOpen(now: now, calendar: calendar)
         save()
     }
 
     public func claimDailyReward() -> Int? {
-        guard progress.canClaimDailyReward() else {
+        let now = clock.now
+        guard progress.canClaimDailyReward(calendar: calendar, now: now) else {
             return nil
         }
 
@@ -111,7 +119,7 @@ public class PlayerProgressManager: ObservableObject {
 
         progress.coins += rewardAmount
         progress.totalCoinsEarned += rewardAmount
-        progress.lastDailyRewardClaimedDate = Date()
+        progress.lastDailyRewardClaimedDate = now
         save()
 
         // Log analytics event
@@ -121,7 +129,8 @@ public class PlayerProgressManager: ObservableObject {
     }
 
     public func shouldShowDailyReward() -> Bool {
-        return progress.canClaimDailyReward()
+        let now = clock.now
+        return progress.canClaimDailyReward(calendar: calendar, now: now)
     }
 
     #if DEBUG
@@ -210,8 +219,7 @@ public class PlayerProgressManager: ObservableObject {
     /// Called at end of each competitive game session.
     /// Separate from the app-open streak which drives daily rewards.
     public func updatePlayStreak() {
-        let calendar = Calendar.current
-        let today = Date()
+        let today = clock.now
 
         guard let lastPlayed = progress.lastPlayedDate else {
             // First game ever
@@ -222,12 +230,13 @@ public class PlayerProgressManager: ObservableObject {
             return
         }
 
-        if calendar.isDateInToday(lastPlayed) {
+        if calendar.isDate(lastPlayed, inSameDayAs: today) {
             // Already played today, no change
             return
         }
 
-        if calendar.isDateInYesterday(lastPlayed) {
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)
+        if let yesterday, calendar.isDate(lastPlayed, inSameDayAs: yesterday) {
             // Consecutive day — increment
             progress.currentPlayStreak += 1
         } else {
@@ -386,7 +395,12 @@ public class PlayerProgressManager: ObservableObject {
     /// Checks for newly unlocked achievements and updates progress
     /// Call this after recording session stats or other progress updates
     public func checkAndUnlockAchievements() {
-        let unlocked = achievementService.checkAchievements(progress: progress)
+        let now = clock.now
+        let unlocked = achievementService.checkAchievements(
+            progress: progress,
+            date: now,
+            calendar: calendar
+        )
 
         guard !unlocked.isEmpty else {
             newlyUnlockedAchievements = []
@@ -557,14 +571,16 @@ public class PlayerProgressManager: ObservableObject {
         guard let lastWatched = progress.lastRewardAdWatchedDate else {
             return true
         }
-        let hoursSince = Date().timeIntervalSince(lastWatched) / 3600
+        let now = clock.now
+        let hoursSince = now.timeIntervalSince(lastWatched) / 3600
         return hoursSince >= 6
     }
 
     /// Records that the user watched a rewarded ad and awards coins
     /// - Parameter coinsAwarded: Number of coins to award (default: 25)
     public func recordRewardAdWatched(coinsAwarded: Int = 25) {
-        progress.lastRewardAdWatchedDate = Date()
+        let now = clock.now
+        progress.lastRewardAdWatchedDate = now
         addCoins(coinsAwarded)
     }
 
@@ -574,7 +590,8 @@ public class PlayerProgressManager: ObservableObject {
         guard let lastWatched = progress.lastRewardAdWatchedDate else {
             return nil
         }
-        let secondsSince = Date().timeIntervalSince(lastWatched)
+        let now = clock.now
+        let secondsSince = now.timeIntervalSince(lastWatched)
         let cooldownSeconds: TimeInterval = 6 * 3600 // 6 hours
         let remaining = cooldownSeconds - secondsSince
         return remaining > 0 ? remaining : nil
@@ -791,20 +808,21 @@ public class PlayerProgressManager: ObservableObject {
         public var correctByDifficulty: [QuestionDifficulty: Int]
         public var sessionHour: Int
 
-        public init() {
+        public init(calendar: Calendar = .current, now: Date = Date()) {
             self.questionsAnswered = 0
             self.questionsCorrect = 0
             self.totalResponseTimeMs = 0
             self.questionsByDifficulty = [:]
             self.correctByDifficulty = [:]
-            self.sessionHour = Calendar.current.component(.hour, from: Date())
+            self.sessionHour = calendar.component(.hour, from: now)
         }
     }
 
     /// Records detailed session statistics at end of game
     /// - Parameter sessionStats: Aggregated statistics from the game session
     public func recordAdvancedSessionStats(_ sessionStats: SessionStatistics) {
-        let todayKey = PlayerProgress.todayKey
+        let now = clock.now
+        let todayKey = PlayerProgress.dateKey(for: now, calendar: calendar)
 
         // Update or create daily stat
         var dailyStat = progress.dailyStats[todayKey] ?? DailyStat()
@@ -843,16 +861,15 @@ public class PlayerProgressManager: ObservableObject {
         }
 
         // Cleanup old daily stats (keep 30 days)
-        cleanupOldDailyStats()
+        cleanupOldDailyStats(now: now)
 
         save()
     }
 
     /// Removes daily stats older than 30 days
-    private func cleanupOldDailyStats() {
-        let calendar = Calendar.current
-        let cutoffDate = calendar.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        let cutoffKey = PlayerProgress.dailyStatsDateFormatter.string(from: cutoffDate)
+    private func cleanupOldDailyStats(now: Date) {
+        let cutoffDate = calendar.date(byAdding: .day, value: -30, to: now) ?? now
+        let cutoffKey = PlayerProgress.dateKey(for: cutoffDate, calendar: calendar)
 
         progress.dailyStats = progress.dailyStats.filter { key, _ in
             key >= cutoffKey
@@ -865,12 +882,12 @@ public class PlayerProgressManager: ObservableObject {
     /// - Parameter days: Number of days to retrieve (default 7)
     /// - Returns: Array of (dateKey, DailyStat) tuples, oldest first
     public func getDailyStats(forLastDays days: Int = 7) -> [(date: String, stat: DailyStat)] {
-        let calendar = Calendar.current
         var result: [(String, DailyStat)] = []
+        let now = clock.now
 
         for dayOffset in (0..<days).reversed() {
-            guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: Date()) else { continue }
-            let key = PlayerProgress.dailyStatsDateFormatter.string(from: date)
+            guard let date = calendar.date(byAdding: .day, value: -dayOffset, to: now) else { continue }
+            let key = PlayerProgress.dateKey(for: date, calendar: calendar)
             let stat = progress.dailyStats[key] ?? DailyStat()
             result.append((key, stat))
         }

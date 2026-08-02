@@ -64,15 +64,25 @@ public protocol QuestionDataServiceProvider {
 public final class QuestionDataService: QuestionDataServiceProvider {
     private let resourceBundle: Bundle
     private let questionsFileName: String
+    private var randomNumberGenerator: any RandomNumberGenerator
 
-    public init(resource: QuestionResource) {
+    public init(
+        resource: QuestionResource,
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
         self.resourceBundle = resource.bundle
         self.questionsFileName = resource.fileName
+        self.randomNumberGenerator = randomNumberGenerator
     }
 
-    public init(bundle: Bundle, fileName: String) {
+    public init(
+        bundle: Bundle,
+        fileName: String,
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
         self.resourceBundle = bundle
         self.questionsFileName = fileName
+        self.randomNumberGenerator = randomNumberGenerator
     }
 
     // MARK: - Load all questions from default file
@@ -133,21 +143,21 @@ public final class QuestionDataService: QuestionDataServiceProvider {
 
     public func getQuestionsForCompetitiveMode() throws -> [Question] {
         let allQuestions = try getQuestionData().questions
-        return allQuestions.shuffled()
+        return allQuestions.shuffled(using: &randomNumberGenerator)
     }
 
     // MARK: - Category Mode (All Questions from Category)
 
     public func getQuestionsForCategoryMode(category: String) throws -> [Question] {
         let categoryQuestions = try getQuestions(category: category, difficulty: nil)
-        return categoryQuestions.shuffled()
+        return categoryQuestions.shuffled(using: &randomNumberGenerator)
     }
 
     // MARK: - Multiplayer Mode (Random from All Categories)
 
     public func getQuestionsForMultiplayerMatch(count: Int = 15) throws -> [Question] {
         let allQuestions = try getQuestionData().questions.filter { $0.imageName == nil }
-        return Array(allQuestions.shuffled().prefix(count))
+        return Array(allQuestions.shuffled(using: &randomNumberGenerator).prefix(count))
     }
 
     // MARK: - Practice Mode (Simple Random - Exactly 20 Questions)
@@ -163,8 +173,12 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         let masteredCount = allCategoryQuestions.filter { correctlyAnsweredIDs.contains($0.id) }.count
         let isCategoryComplete = masteredCount >= totalInCategory && totalInCategory > 0
 
-        let unanswered = allCategoryQuestions.filter { !correctlyAnsweredIDs.contains($0.id) }.shuffled()
-        let answered   = allCategoryQuestions.filter {  correctlyAnsweredIDs.contains($0.id) }.shuffled()
+        let unanswered = allCategoryQuestions
+            .filter { !correctlyAnsweredIDs.contains($0.id) }
+            .shuffled(using: &randomNumberGenerator)
+        let answered = allCategoryQuestions
+            .filter { correctlyAnsweredIDs.contains($0.id) }
+            .shuffled(using: &randomNumberGenerator)
 
         let unansweredTarget = Int(Double(sessionSize) * 0.8)
         let unansweredToTake = min(unansweredTarget, unanswered.count)
@@ -175,11 +189,13 @@ public final class QuestionDataService: QuestionDataServiceProvider {
 
         if session.count < sessionSize {
             let used = Set(session.map(\.id))
-            let extra = allCategoryQuestions.filter { !used.contains($0.id) }.shuffled()
+            let extra = allCategoryQuestions
+                .filter { !used.contains($0.id) }
+                .shuffled(using: &randomNumberGenerator)
             session += extra.prefix(sessionSize - session.count)
         }
 
-        let questionsToReturn = session.shuffled()
+        let questionsToReturn = session.shuffled(using: &randomNumberGenerator)
 
         return PracticeSessionResult(
             questions: questionsToReturn,
@@ -207,16 +223,16 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         var session: [Question] = []
 
         if unanswered.count >= unansweredCount {
-            session.append(contentsOf: unanswered.shuffled().prefix(unansweredCount))
+            session.append(contentsOf: unanswered.shuffled(using: &randomNumberGenerator).prefix(unansweredCount))
         } else {
-            session.append(contentsOf: unanswered.shuffled())
+            session.append(contentsOf: unanswered.shuffled(using: &randomNumberGenerator))
             let remaining = unansweredCount - unanswered.count
-            session.append(contentsOf: answered.shuffled().prefix(remaining))
+            session.append(contentsOf: answered.shuffled(using: &randomNumberGenerator).prefix(remaining))
         }
 
-        session.append(contentsOf: answered.shuffled().prefix(reviewCount))
+        session.append(contentsOf: answered.shuffled(using: &randomNumberGenerator).prefix(reviewCount))
 
-        return session.shuffled().prefix(sessionSize).map { $0 }
+        return session.shuffled(using: &randomNumberGenerator).prefix(sessionSize).map { $0 }
     }
 
     @available(*, deprecated, message: "Difficulty progression not currently used")
@@ -262,9 +278,9 @@ public final class QuestionDataService: QuestionDataServiceProvider {
     }
 
     private func applyDifficultyProgression(to questions: [Question]) -> [Question] {
-        let easy = questions.filter { $0.difficulty == 1 }.shuffled()
-        let medium = questions.filter { $0.difficulty == 2 }.shuffled()
-        let hard = questions.filter { $0.difficulty == 3 }.shuffled()
+        let easy = questions.filter { $0.difficulty == 1 }.shuffled(using: &randomNumberGenerator)
+        let medium = questions.filter { $0.difficulty == 2 }.shuffled(using: &randomNumberGenerator)
+        let hard = questions.filter { $0.difficulty == 3 }.shuffled(using: &randomNumberGenerator)
 
         var result: [Question] = []
         var easyIndex = 0

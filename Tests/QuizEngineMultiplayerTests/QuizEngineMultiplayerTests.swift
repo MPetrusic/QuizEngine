@@ -1,5 +1,6 @@
 import XCTest
 import QuizEngineCore
+import QuizEngineTestSupport
 @testable import QuizEngineMultiplayer
 
 @MainActor
@@ -49,33 +50,22 @@ final class QuizEngineMultiplayerTests: XCTestCase {
             return XCTFail("Expected generic inbound connection state")
         }
     }
-}
 
-@MainActor
-private final class FakeTransport: MultiplayerTransport {
-    let localPlayer = MultiplayerPlayer(id: "test", displayName: "Test")
-    private(set) var connectionState: TransportConnectionState = .idle
-    private(set) var eventStream: AsyncStream<MultiplayerTransportEvent>
-    private var continuation: AsyncStream<MultiplayerTransportEvent>.Continuation
+    func testCoordinatorTimeoutUsesInjectedScheduler() {
+        let scheduler = TestScheduler()
+        let coordinator = MultiplayerGameCoordinator(scheduler: scheduler)
+        let transport = FakeTransport()
+        let opponent = MultiplayerPlayer(id: "opponent", displayName: "Opponent")
 
-    init() {
-        let (stream, continuation) = AsyncStream.makeStream(of: MultiplayerTransportEvent.self)
-        self.eventStream = stream
-        self.continuation = continuation
-    }
+        coordinator.startGame(
+            transport: transport,
+            opponent: opponent,
+            role: .guest
+        )
+        scheduler.advance(by: 10)
 
-    func startSearching() { connectionState = .searching }
-    func stopSearching() { connectionState = .idle }
-    func invite(player: MultiplayerPlayer) {}
-    func acceptInvite(from player: MultiplayerPlayer) {}
-    func declineInvite(from player: MultiplayerPlayer) {}
-    func send(message: MultiplayerMessage) throws {}
-    func disconnect() { connectionState = .disconnected }
-
-    func resetEventStream() {
-        continuation.finish()
-        let (stream, continuation) = AsyncStream.makeStream(of: MultiplayerTransportEvent.self)
-        eventStream = stream
-        self.continuation = continuation
+        guard case .disconnected = coordinator.sessionState else {
+            return XCTFail("Expected the guest configuration timeout to disconnect")
+        }
     }
 }

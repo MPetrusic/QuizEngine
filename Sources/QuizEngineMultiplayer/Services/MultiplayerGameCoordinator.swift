@@ -46,12 +46,12 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
     /// Transport reference — accessible by ViewModel for sending gameConfig
     public private(set) var transport: (any MultiplayerTransport)?
     private var eventListenerTask: Task<Void, Never>?
-    private var reconnectionTask: Task<Void, Never>?
-    private var pauseTimeoutTask: Task<Void, Never>?
-    private var readyTimeoutTask: Task<Void, Never>?
-    private var questionResultTimeoutTask: Task<Void, Never>?
-    private var gameConfigTimeoutTask: Task<Void, Never>?
-    private var gameEndTimeoutTask: Task<Void, Never>?
+    private var reconnectionTask: (any QuizEngineScheduledTask)?
+    private var pauseTimeoutTask: (any QuizEngineScheduledTask)?
+    private var readyTimeoutTask: (any QuizEngineScheduledTask)?
+    private var questionResultTimeoutTask: (any QuizEngineScheduledTask)?
+    private var gameConfigTimeoutTask: (any QuizEngineScheduledTask)?
+    private var gameEndTimeoutTask: (any QuizEngineScheduledTask)?
     private var readyRetryCount = 0
     private var questionResultRetryCount = 0
     private var lastSentAnswer: AnswerPayload?
@@ -68,11 +68,16 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
     // MARK: - Dependencies
 
     private let analytics: (any AnalyticsProvider)?
+    private let scheduler: any QuizEngineScheduler
 
     // MARK: - Init
 
-    public init(analytics: (any AnalyticsProvider)? = nil) {
+    public init(
+        analytics: (any AnalyticsProvider)? = nil,
+        scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler()
+    ) {
         self.analytics = analytics
+        self.scheduler = scheduler
     }
 
     // MARK: - Lifecycle
@@ -202,9 +207,8 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
     /// Guest: start a timeout waiting for gameEnd after the last round.
     public func startGameEndTimeout() {
         gameEndTimeoutTask?.cancel()
-        gameEndTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.gameEndTimeout))
-            guard !Task.isCancelled, let self, self.gameEndResult == nil else { return }
+        gameEndTimeoutTask = scheduler.schedule(after: Self.gameEndTimeout) { [weak self] in
+            guard let self, self.gameEndResult == nil else { return }
             print("[MultiplayerGameCoordinator] gameEnd timeout — auto-ending game with local scores")
             let endPayload = GameEndPayload(
                 hostFinalScore: self.lastHostScore,
@@ -330,10 +334,9 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
             : Self.softDisconnectGracePeriod
 
         reconnectionTask?.cancel()
-        reconnectionTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(gracePeriod))
-            guard !Task.isCancelled else { return }
-            self?.handleReconnectionTimeout()
+        reconnectionTask = scheduler.schedule(after: gracePeriod) { [weak self] in
+            guard let self else { return }
+            self.handleReconnectionTimeout()
         }
     }
 
@@ -371,11 +374,10 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
 
     private func startPauseTimeout() {
         pauseTimeoutTask?.cancel()
-        pauseTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.pauseTimeout))
-            guard !Task.isCancelled else { return }
-            self?.stateBeforeInterruption = nil
-            self?.handleDisconnect(isHardDisconnect: false)
+        pauseTimeoutTask = scheduler.schedule(after: Self.pauseTimeout) { [weak self] in
+            guard let self else { return }
+            self.stateBeforeInterruption = nil
+            self.handleDisconnect(isHardDisconnect: false)
         }
     }
 
@@ -383,9 +385,8 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
 
     private func startReadyTimeout() {
         readyTimeoutTask?.cancel()
-        readyTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.readyTimeout))
-            guard !Task.isCancelled, let self, !self.opponentReady else { return }
+        readyTimeoutTask = scheduler.schedule(after: Self.readyTimeout) { [weak self] in
+            guard let self, !self.opponentReady else { return }
 
             if self.readyRetryCount < Self.maxReadyRetries {
                 self.readyRetryCount += 1
@@ -407,9 +408,8 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
 
     private func startQuestionResultTimeout() {
         questionResultTimeoutTask?.cancel()
-        questionResultTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.questionResultTimeout))
-            guard !Task.isCancelled, let self, self.questionResult == nil else { return }
+        questionResultTimeoutTask = scheduler.schedule(after: Self.questionResultTimeout) { [weak self] in
+            guard let self, self.questionResult == nil else { return }
 
             if self.questionResultRetryCount < Self.maxQuestionResultRetries {
                 self.questionResultRetryCount += 1
@@ -427,9 +427,8 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
 
     private func startGameConfigTimeout() {
         gameConfigTimeoutTask?.cancel()
-        gameConfigTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.gameConfigTimeout))
-            guard !Task.isCancelled, let self, self.receivedGameConfig == nil else { return }
+        gameConfigTimeoutTask = scheduler.schedule(after: Self.gameConfigTimeout) { [weak self] in
+            guard let self, self.receivedGameConfig == nil else { return }
             print("[MultiplayerGameCoordinator] gameConfig timeout — ending game")
             let endPayload = GameEndPayload(
                 hostFinalScore: 0,

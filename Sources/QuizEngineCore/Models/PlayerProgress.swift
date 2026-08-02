@@ -544,6 +544,16 @@ public struct PlayerProgress: Codable, Sendable {
         Calendar.current.component(.hour, from: Date())
     }
 
+    /// Returns a stable local-calendar key for daily statistics.
+    public static func dateKey(for date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
     // MARK: - Streak Helpers
 
     public func dailyRewardAmount() -> Int {
@@ -560,16 +570,21 @@ public struct PlayerProgress: Codable, Sendable {
         allStreakTiers.firstIndex { $0.contains(day: currentStreak) } ?? 0
     }
 
-    public func canClaimDailyReward() -> Bool {
+    public func canClaimDailyReward(
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) -> Bool {
         guard let lastClaimed = lastDailyRewardClaimedDate else {
             return true
         }
-        return !Calendar.current.isDateInToday(lastClaimed)
+        return !calendar.isDate(lastClaimed, inSameDayAs: now)
     }
 
-    public mutating func updateStreakOnAppOpen() {
-        let calendar = Calendar.current
-        let today = Date()
+    public mutating func updateStreakOnAppOpen(
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) {
+        let today = now
 
         guard let lastOpen = lastAppOpenDate else {
             // First time opening app
@@ -578,7 +593,7 @@ public struct PlayerProgress: Codable, Sendable {
             return
         }
 
-        if calendar.isDateInToday(lastOpen) {
+        if calendar.isDate(lastOpen, inSameDayAs: today) {
             // Already opened today, no change
             return
         }
@@ -587,7 +602,8 @@ public struct PlayerProgress: Codable, Sendable {
         // AchievementService uses this to evaluate the "comeback" achievement.
         previousAppOpenDate = lastOpen
 
-        if calendar.isDateInYesterday(lastOpen) {
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)
+        if let yesterday, calendar.isDate(lastOpen, inSameDayAs: yesterday) {
             // Consecutive day - increment streak
             currentStreak += 1
             if currentStreak > longestStreak {

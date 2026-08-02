@@ -15,7 +15,7 @@ Use the smallest product set your app needs:
 Add the public package at the exact validated release:
 
 ```swift
-.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.1.2")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.1.3")
 ```
 
 No repository credentials are required. Pin an exact release tag; do not use a moving branch as a production dependency.
@@ -46,6 +46,7 @@ Firebase, Google Mobile Ads, StoreKit, Game Center, MultipeerConnectivity, their
 - [Providers and vendor integrations](Docs/providers-and-integrations.md)
 - [Optional multiplayer](Docs/multiplayer.md)
 - [Persistence, upgrades, and troubleshooting](Docs/persistence-upgrades-troubleshooting.md)
+- [Deterministic testing](Docs/testing.md)
 - [Release checklist](Docs/release-checklist.md)
 
 ## Verification
@@ -56,3 +57,15 @@ swift test -Xswiftc -target -Xswiftc arm64-apple-macosx14.0 -Xswiftc -strict-con
 ```
 
 The macOS target is only the Swift test host. Package products support iOS 17 and later.
+
+## Deterministic testing
+
+QuizEngine keeps production defaults for consumers, but its time, calendar, random selection, and delayed-work dependencies are injectable:
+
+- `QuizEngineClock` and an explicit `Calendar` control date, time-zone, streak, cooldown, and statistics behavior.
+- `RandomNumberGenerator` injection controls question, answer, seed, and ad-selection randomness.
+- `QuizEngineScheduler` controls delayed game and multiplayer work. Tests can manually advance a scheduler instead of sleeping.
+- `PlayerProgressManager` and `UserPreferencesLoader` accept temporary persistence URLs for isolated tests.
+- Existing provider protocols accept fake analytics, ads, purchases, haptics, leaderboards, and transports.
+
+The package's `QuizEngineTestSupport` target is test-only and is not exposed as a library product. It supplies reusable clocks, schedulers, temporary persistence, provider fakes, transport fakes, and fixtures for the package test targets.

@@ -18,6 +18,11 @@ public class QuizViewModel: ObservableObject {
     private let analytics: (any AnalyticsProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
     private let haptics: (any HapticProvider)?
+    private let clock: any QuizEngineClock
+    private let calendar: Calendar
+    private let scheduler: any QuizEngineScheduler
+    private var randomNumberGenerator: any RandomNumberGenerator
+    private var scheduledTasks: [ScheduledTaskKind: ScheduledTaskRegistration] = [:]
 
     @Published public private(set) var questionData: [Question] = []
     @Published public private(set) var questionNumber = -1
@@ -87,7 +92,22 @@ public class QuizViewModel: ObservableObject {
     private var questionDisplayTime: Date?
 
     /// Accumulated session statistics for advanced analytics
-    private var advancedSessionStats = PlayerProgressManager.SessionStatistics()
+    private var advancedSessionStats: PlayerProgressManager.SessionStatistics
+
+    private enum ScheduledTaskKind: Hashable {
+        case wrongAnswerAdvance
+        case description
+        case lifeGranted
+        case streak
+        case nextQuestion
+        case wrongAnswerOverlay
+        case skipQuestion
+        case timeFreeze
+    }
+
+    private final class ScheduledTaskRegistration {
+        var task: (any QuizEngineScheduledTask)?
+    }
 
     public init(
         questions: [Question]?,
@@ -98,13 +118,18 @@ public class QuizViewModel: ObservableObject {
         rewardAd: (any RewardAdProvider)? = nil,
         leaderboard: (any LeaderboardProvider)? = nil,
         purchaseStatus: (any PurchaseStatusProvider)? = nil,
-        haptics: (any HapticProvider)? = nil
+        haptics: (any HapticProvider)? = nil,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        calendar: Calendar = .current,
+        scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
     ) {
+        var initialRandomNumberGenerator = randomNumberGenerator
         if let orderedQuestions = questions {
             // Preserve question order (difficulty progression applied in QuestionDataService)
             // Only shuffle answers within each question
             self.questionData = orderedQuestions.map { question in
-                let shuffledAnswers = question.answers.shuffled()
+                let shuffledAnswers = question.answers.shuffled(using: &initialRandomNumberGenerator)
                 return Question(
                     id: question.id,
                     question: question.question,
@@ -127,6 +152,14 @@ public class QuizViewModel: ObservableObject {
         self.leaderboard = leaderboard
         self.purchaseStatus = purchaseStatus
         self.haptics = haptics
+        self.clock = clock
+        self.calendar = calendar
+        self.scheduler = scheduler
+        self.randomNumberGenerator = initialRandomNumberGenerator
+        self.advancedSessionStats = PlayerProgressManager.SessionStatistics(
+            calendar: calendar,
+            now: clock.now
+        )
 
         // Log game start event
         analytics?.logGameStarted(category: selectedCategory, mode: gameMode)
@@ -138,7 +171,7 @@ public class QuizViewModel: ObservableObject {
 
     public func showWrongAnswerView() {
         stopTimer()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        schedule(.wrongAnswerAdvance, after: 1.0) {
             self.shouldAllowTap = true
 
             guard self.livesRemaining > 0 else {
@@ -159,7 +192,7 @@ public class QuizViewModel: ObservableObject {
         stopTimer()
 
         // Delay showing the description to let the wrong answer animation play first
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        schedule(.description, after: 1.0) {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                 self.shouldShowAnswerDescription = true
             }
@@ -186,7 +219,7 @@ public class QuizViewModel: ObservableObject {
         withAnimation {
             shouldShowLifeGrantedView = true
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        schedule(.lifeGranted, after: 1.0) {
             self.shouldAllowTap = true
             withAnimation {
                 self.shouldShowLifeGrantedView = false
@@ -201,7 +234,7 @@ public class QuizViewModel: ObservableObject {
             shouldShowStreakView = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        schedule(.streak, after: 1.0) {
             withAnimation {
                 self.shouldShowStreakView = false
             }
@@ -232,7 +265,7 @@ public class QuizViewModel: ObservableObject {
             trackCurrentQuestionAsSeen()
 
             // Phase E8: Record when question is displayed for response time tracking
-            questionDisplayTime = Date()
+            questionDisplayTime = clock.now
         }
     }
 
@@ -279,7 +312,7 @@ public class QuizViewModel: ObservableObject {
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        schedule(.nextQuestion, after: 1.0) {
             self.updateRemainingTime()
             self.startTimer()
             self.shouldAllowTap = true
@@ -295,13 +328,14 @@ public class QuizViewModel: ObservableObject {
         if purchaseStatus?.adsRemoved ?? false { return false }
 
         // 40% chance (2 in 5 sessions)
-        return Int.random(in: 0..<5) < 2
+        return Int.random(in: 0..<5, using: &randomNumberGenerator) < 2
     }
 
     public func restartGame() {
+        cancelScheduledTasks()
         startTimer()
         updateRemainingTime()
-        questionData = questionData.shuffled()
+        questionData = questionData.shuffled(using: &randomNumberGenerator)
         questionNumber = 0
         score = 0
         livesRemaining = 3
@@ -320,7 +354,10 @@ public class QuizViewModel: ObservableObject {
         shouldPresentResultView = false
         adRewardWasShown = false
         interstitialAdWasShown = false
-        advancedSessionStats = PlayerProgressManager.SessionStatistics()
+        advancedSessionStats = PlayerProgressManager.SessionStatistics(
+            calendar: calendar,
+            now: clock.now
+        )
         interstitialAd?.load()
         rewardAd?.load()
     }
@@ -377,6 +414,7 @@ public class QuizViewModel: ObservableObject {
     }
 
     public func endGame() {
+        cancelScheduledTasks()
         hideRewardProposalView()
         stopTimer()
 
@@ -481,7 +519,7 @@ public class QuizViewModel: ObservableObject {
                 shouldShowWrongAnswerView = true
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            schedule(.wrongAnswerOverlay, after: 1.0) {
                 withAnimation {
                     self.shouldShowWrongAnswerView = false
                 }
@@ -536,7 +574,7 @@ public class QuizViewModel: ObservableObject {
         let wrongIndices = currentAnswers.enumerated()
             .filter { !$0.element.correct }
             .map { $0.offset }
-            .shuffled()
+            .shuffled(using: &randomNumberGenerator)
 
         let toHide = Array(wrongIndices.prefix(2))
         withAnimation {
@@ -554,7 +592,7 @@ public class QuizViewModel: ObservableObject {
         stopTimer()
         updateRemainingTime()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        schedule(.skipQuestion, after: 0.3) {
             self.startTimer()
             withAnimation {
                 self.goToNextQuestion()
@@ -572,7 +610,7 @@ public class QuizViewModel: ObservableObject {
         isTimeFrozen = true
         stopTimer()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+        schedule(.timeFreeze, after: 10.0) {
             guard self.isTimeFrozen else { return }
             self.isTimeFrozen = false
             self.startTimer()
@@ -637,7 +675,7 @@ public class QuizViewModel: ObservableObject {
         // Calculate response time in milliseconds
         let responseTimeMs: Int
         if let displayTime = questionDisplayTime {
-            responseTimeMs = Int(Date().timeIntervalSince(displayTime) * 1000)
+            responseTimeMs = Int(clock.now.timeIntervalSince(displayTime) * 1000)
         } else {
             responseTimeMs = 0
         }
@@ -660,5 +698,33 @@ public class QuizViewModel: ObservableObject {
             advancedSessionStats.questionsCorrect += 1
             advancedSessionStats.correctByDifficulty[difficulty, default: 0] += 1
         }
+    }
+
+    // MARK: - Deterministic Scheduling
+
+    private func schedule(
+        _ kind: ScheduledTaskKind,
+        after delay: TimeInterval,
+        _ operation: @escaping @MainActor () -> Void
+    ) {
+        scheduledTasks[kind]?.task?.cancel()
+
+        let registration = ScheduledTaskRegistration()
+        scheduledTasks[kind] = registration
+
+        let task = scheduler.schedule(after: delay) { [weak self, weak registration] in
+            operation()
+
+            guard let self,
+                  let registration,
+                  self.scheduledTasks[kind] === registration else { return }
+            self.scheduledTasks.removeValue(forKey: kind)
+        }
+        registration.task = task
+    }
+
+    private func cancelScheduledTasks() {
+        scheduledTasks.values.compactMap(\.task).forEach { $0.cancel() }
+        scheduledTasks.removeAll()
     }
 }

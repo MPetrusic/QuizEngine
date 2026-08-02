@@ -1,5 +1,6 @@
 import XCTest
 @testable import QuizEngineCore
+import QuizEngineTestSupport
 
 @MainActor
 final class QuizEngineCoreTests: XCTestCase {
@@ -183,6 +184,67 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertEqual(decoded.manuallyUnlockedCategories, ["legacy_category"])
         XCTAssertEqual(decoded.lifetimeGamesPlayed, 9)
         XCTAssertEqual(decoded.multiplayerGamesPlayed, 0)
+    }
+
+    func testQuestionSelectionUsesInjectedRandomNumberGenerator() throws {
+        let first = QuestionDataService(
+            bundle: .module,
+            fileName: "alternate_questions",
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 123)
+        )
+        let second = QuestionDataService(
+            bundle: .module,
+            fileName: "alternate_questions",
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 123)
+        )
+
+        XCTAssertEqual(
+            try first.getQuestionsForCompetitiveMode().map(\.id),
+            try second.getQuestionsForCompetitiveMode().map(\.id)
+        )
+    }
+
+    func testProgressManagerUsesTemporaryPersistenceAndInjectedTime() throws {
+        let persistence = try TemporaryPersistence()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let clock = TestClock(now: calendar.date(from: DateComponents(year: 2026, month: 8, day: 2, hour: 12))!)
+        let variant = try makeAlternateVariant()
+
+        let manager = PlayerProgressManager(
+            variant: variant,
+            questionDataService: service,
+            persistenceURL: persistence.progressURL,
+            clock: clock,
+            calendar: calendar
+        )
+        manager.handleAppOpen()
+        XCTAssertEqual(manager.currentStreak, 1)
+        XCTAssertEqual(manager.claimDailyReward(), 10)
+
+        clock.advance(by: 24 * 60 * 60)
+        manager.handleAppOpen()
+        XCTAssertEqual(manager.currentStreak, 2)
+        XCTAssertEqual(manager.claimDailyReward(), 15)
+
+        let reloaded = PlayerProgressManager(
+            variant: variant,
+            questionDataService: service,
+            persistenceURL: persistence.progressURL,
+            clock: clock,
+            calendar: calendar
+        )
+        XCTAssertEqual(reloaded.currentStreak, 2)
+        XCTAssertEqual(reloaded.coins, 125)
+    }
+
+    func testUserPreferencesCanUseTemporaryPersistence() throws {
+        let persistence = try TemporaryPersistence()
+        let preferences = UserPreferences(hapticsEnabled: false)
+
+        UserPreferencesLoader.write(preferences: preferences, to: persistence.preferencesURL)
+
+        XCTAssertFalse(UserPreferencesLoader.load(from: persistence.preferencesURL).hapticsEnabled)
     }
 
     private var utcCalendar: Calendar {

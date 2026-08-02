@@ -85,7 +85,12 @@ public struct Question: Identifiable, Codable, Hashable, Sendable {
     }
 
     public var getAnswersShuffled: [Answer] {
-        answers.shuffled()
+        var randomNumberGenerator = SystemRandomNumberGenerator()
+        return answers.shuffled(using: &randomNumberGenerator)
+    }
+
+    public func getAnswersShuffled<R: RandomNumberGenerator>(using randomNumberGenerator: inout R) -> [Answer] {
+        answers.shuffled(using: &randomNumberGenerator)
     }
 
     public func getDecription() -> String {
