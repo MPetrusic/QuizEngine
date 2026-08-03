@@ -155,11 +155,12 @@ final class QuizEngineCoreTests: XCTestCase {
 
     func testCategoryUnlockRulesUseVariantDefinitionsAndRejectUnknownPremiumIDs() throws {
         let variant = try makeAlternateVariant()
+        let persistence = try TemporaryPersistence()
         let manager = PlayerProgressManager(
             variant: variant,
             questionDataService: service,
             purchaseStatus: PremiumPurchaseStatus(),
-            persistenceURL: try temporaryProgressURL()
+            persistenceURL: persistence.progressURL
         )
 
         XCTAssertTrue(manager.isCategoryUnlocked("nature"))
@@ -247,6 +248,677 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertFalse(UserPreferencesLoader.load(from: persistence.preferencesURL).hapticsEnabled)
     }
 
+    func testVersionedProgressWriteReloadsThroughInjectedStore() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+
+        manager.addCoins(25)
+
+        XCTAssertEqual(manager.persistenceStatus, .saved)
+        XCTAssertNil(manager.lastPersistenceError)
+        XCTAssertNotNil(store.primaryData)
+
+        let reloaded = try makeManager(store: store)
+        XCTAssertEqual(reloaded.coins, 125)
+        XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 1))
+
+        let propertyList = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: try XCTUnwrap(store.primaryData), options: [], format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(propertyList["schemaVersion"] as? Int, QuizEnginePersistenceSchema.current)
+    }
+
+    func testFileStoreLeavesBackupAndCleansTemporaryFilesAfterReplacement() throws {
+        let persistence = try TemporaryPersistence()
+        let variant = try makeAlternateVariant()
+        let manager = PlayerProgressManager(
+            variant: variant,
+            questionDataService: service,
+            persistenceURL: persistence.progressURL
+        )
+
+        manager.addCoins(1)
+        manager.addCoins(1)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".backup"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".tmp"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".backup.tmp"))
+
+        try Data("stale primary temp".utf8).write(to: URL(fileURLWithPath: persistence.progressURL.path + ".tmp"))
+        try Data("stale backup temp".utf8).write(to: URL(fileURLWithPath: persistence.progressURL.path + ".backup.tmp"))
+        try Data("stale marker temp".utf8).write(to: URL(fileURLWithPath: persistence.progressURL.path + ".import-marker.tmp"))
+        _ = PlayerProgressManager(
+            variant: variant,
+            questionDataService: service,
+            persistenceURL: persistence.progressURL
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".tmp"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".backup.tmp"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: persistence.progressURL.path + ".import-marker.tmp"))
+    }
+
+    func testLegacyProgressLoadsAndNextSavePromotesToVersionedEnvelope() throws {
+        var legacyProgress = PlayerProgress.default
+        legacyProgress.coins = 321
+        let legacyData = try PropertyListEncoder().encode(legacyProgress)
+        let store = FakePersistenceStore(primaryData: legacyData)
+
+        let manager = try makeManager(store: store)
+        XCTAssertEqual(manager.coins, 321)
+        XCTAssertEqual(manager.persistenceStatus, .loadedLegacy)
+
+        manager.addCoins(1)
+
+        let propertyList = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: try XCTUnwrap(store.primaryData), options: [], format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(propertyList["schemaVersion"] as? Int, QuizEnginePersistenceSchema.current)
+        XCTAssertEqual(manager.coins, 322)
+    }
+
+    func testCompatibilityInitializerExposesMalformedPersistenceWithoutThrowing() throws {
+        let persistence = try TemporaryPersistence()
+        try Data("malformed".utf8).write(to: persistence.progressURL)
+        let variant = try makeAlternateVariant()
+
+        let manager = PlayerProgressManager(
+            variant: variant,
+            questionDataService: service,
+            persistenceURL: persistence.progressURL
+        )
+
+        XCTAssertEqual(manager.progress, .default)
+        guard case .failed(.malformedData) = manager.persistenceStatus else {
+            return XCTFail("Expected a typed malformed-data status")
+        }
+        XCTAssertEqual(manager.lastPersistenceError, .malformedData(path: persistence.progressURL.path))
+    }
+
+    func testCompatibilityMutatorDoesNotOverwriteUnrecoverablePersistence() throws {
+        let persistence = try TemporaryPersistence()
+        let malformedData = Data("malformed".utf8)
+        try malformedData.write(to: persistence.progressURL)
+        let manager = PlayerProgressManager(
+            variant: try makeAlternateVariant(),
+            questionDataService: service,
+            persistenceURL: persistence.progressURL
+        )
+
+        manager.addCoins(20)
+
+        XCTAssertEqual(manager.progress, .default)
+        XCTAssertEqual(try Data(contentsOf: persistence.progressURL), malformedData)
+        XCTAssertEqual(manager.lastPersistenceError, .malformedData(path: persistence.progressURL.path))
+    }
+
+    func testThrowingInitializerReportsMalformedPersistence() throws {
+        let store = FakePersistenceStore(primaryData: Data("malformed".utf8))
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            guard case PersistenceError.malformedData = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testCorruptPrimaryRecoversFromValidBackup() throws {
+        var backupProgress = PlayerProgress.default
+        backupProgress.coins = 777
+        let store = FakePersistenceStore(
+            primaryData: Data("corrupt".utf8),
+            backupData: try PersistenceDocumentCodec.encode(backupProgress)
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.coins, 777)
+        XCTAssertEqual(manager.persistenceStatus, .recoveredFromBackup(schemaVersion: 1))
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            backupProgress
+        )
+    }
+
+    func testCorruptPrimaryRecoversFromLegacyBackup() throws {
+        var backupProgress = PlayerProgress.default
+        backupProgress.coins = 778
+        let legacyBackup = try PropertyListEncoder().encode(backupProgress)
+        let store = FakePersistenceStore(
+            primaryData: Data("corrupt".utf8),
+            backupData: legacyBackup
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.coins, 778)
+        XCTAssertEqual(manager.persistenceStatus, .recoveredFromBackup(schemaVersion: QuizEnginePersistenceSchema.legacy))
+    }
+
+    func testMissingPrimaryUsesFreshStateAndPreservesStaleBackup() throws {
+        var backupProgress = PlayerProgress.default
+        backupProgress.coins = 456
+        let backupData = try PersistenceDocumentCodec.encode(backupProgress)
+        let store = FakePersistenceStore(backupData: backupData)
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.coins, PlayerProgress.default.coins)
+        XCTAssertEqual(manager.persistenceStatus, .fresh)
+        XCTAssertNil(store.primaryData)
+        XCTAssertEqual(store.backupData, backupData)
+    }
+
+    func testCorruptPrimaryAndBackupReportsTypedRecoveryFailure() throws {
+        let store = FakePersistenceStore(
+            primaryData: Data("corrupt-primary".utf8),
+            backupData: Data("corrupt-backup".utf8)
+        )
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            guard case PersistenceError.backupRecoveryFailed = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testInterruptedImportRestoresPreviousProgressAndClearsPendingMarker() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        var interruptedProgress = PlayerProgress.default
+        interruptedProgress.coins = 999
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(interruptedProgress),
+            backupData: try PersistenceDocumentCodec.encode(previousProgress),
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: "legacy-import",
+                    sourceFingerprint: "snapshot-1",
+                    state: .pending,
+                    hadPrimary: true,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: interruptedProgress,
+                    previousProgress: previousProgress
+                )
+            )
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.coins, 111)
+        XCTAssertEqual(manager.persistenceStatus, .recoveredInterruptedImport)
+        XCTAssertNil(store.transactionMarkerData)
+
+        let request = try PlayerProgressImportRequest(
+            identifier: "legacy-import",
+            sourceFingerprint: "snapshot-1",
+            progress: interruptedProgress
+        )
+        XCTAssertEqual(try manager.importProgress(request), .imported)
+        XCTAssertEqual(manager.coins, 999)
+    }
+
+    func testInterruptedFreshImportRemovesNewPrimaryAndDoesNotAdoptStaleBackup() throws {
+        var staleProgress = PlayerProgress.default
+        staleProgress.coins = 222
+        var interruptedProgress = PlayerProgress.default
+        interruptedProgress.coins = 999
+        let staleBackup = try PersistenceDocumentCodec.encode(staleProgress)
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(interruptedProgress),
+            backupData: staleBackup,
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: "fresh-import",
+                    sourceFingerprint: "snapshot-1",
+                    state: .pending,
+                    hadPrimary: false,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: interruptedProgress
+                )
+            )
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.progress, .default)
+        XCTAssertEqual(manager.persistenceStatus, .recoveredInterruptedImport)
+        XCTAssertNil(store.primaryData)
+        XCTAssertEqual(store.backupData, staleBackup)
+        XCTAssertNil(store.transactionMarkerData)
+    }
+
+    func testPendingImportKeepsIntactPrimaryWhenBackupWasNotUpdated() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        var staleBackupProgress = PlayerProgress.default
+        staleBackupProgress.coins = 222
+        var targetProgress = PlayerProgress.default
+        targetProgress.coins = 999
+        let staleBackup = try PersistenceDocumentCodec.encode(staleBackupProgress)
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(previousProgress),
+            backupData: staleBackup,
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: "pending-import",
+                    sourceFingerprint: "snapshot-1",
+                    state: .pending,
+                    hadPrimary: true,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: targetProgress,
+                    previousProgress: previousProgress
+                )
+            )
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.coins, 111)
+        XCTAssertEqual(manager.persistenceStatus, .recoveredInterruptedImport)
+        XCTAssertEqual(store.backupData, staleBackup)
+        XCTAssertNil(store.transactionMarkerData)
+    }
+
+    func testInterruptedImportRejectsBackupThatDoesNotMatchPreviousProgress() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        var staleBackupProgress = PlayerProgress.default
+        staleBackupProgress.coins = 222
+        var targetProgress = PlayerProgress.default
+        targetProgress.coins = 999
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(targetProgress),
+            backupData: try PersistenceDocumentCodec.encode(staleBackupProgress),
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: "stale-backup-import",
+                    sourceFingerprint: "snapshot-1",
+                    state: .pending,
+                    hadPrimary: true,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: targetProgress,
+                    previousProgress: previousProgress
+                )
+            )
+        )
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            guard case PersistenceError.backupRecoveryFailed = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            targetProgress
+        )
+    }
+
+    func testWriteFailureDoesNotReportCompletionOrChangeInMemoryProgress() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        let store = FakePersistenceStore(primaryData: try PersistenceDocumentCodec.encode(previousProgress))
+        let manager = try makeManager(store: store)
+        store.failurePoint = .replacePrimary
+
+        manager.addCoins(20)
+
+        XCTAssertEqual(manager.coins, 111)
+        XCTAssertEqual(manager.lastPersistenceError, .writeFailed(path: store.primaryURL.path, reason: "Injected failure"))
+        XCTAssertNil(store.transactionMarkerData)
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previousProgress
+        )
+    }
+
+    func testPartialReplacementRestoresPreviousProgressAndReportsFailure() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        let store = FakePersistenceStore(primaryData: try PersistenceDocumentCodec.encode(previousProgress))
+        let manager = try makeManager(store: store)
+        store.failurePoint = .partialReplacePrimary
+
+        manager.addCoins(20)
+
+        XCTAssertEqual(manager.coins, 111)
+        XCTAssertEqual(
+            manager.lastPersistenceError,
+            .writeFailed(path: store.primaryURL.path, reason: "Injected partial replacement failure")
+        )
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previousProgress
+        )
+        XCTAssertTrue(store.operations.contains("restoreBackup"))
+    }
+
+    func testInsufficientStorageIsReportedAsTypedFailure() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        store.failurePoint = .insufficientStorage
+
+        manager.addCoins(20)
+
+        XCTAssertEqual(
+            manager.lastPersistenceError,
+            .insufficientStorage(path: store.primaryURL.path)
+        )
+        XCTAssertEqual(manager.coins, PlayerProgress.default.coins)
+    }
+
+    func testReadBackMismatchRestoresBackupAndRollsBackMutation() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        var mismatchedProgress = previousProgress
+        mismatchedProgress.coins = 999
+        let store = FakePersistenceStore(primaryData: try PersistenceDocumentCodec.encode(previousProgress))
+        let manager = try makeManager(store: store)
+        store.readBackOverride = try PersistenceDocumentCodec.encode(mismatchedProgress)
+
+        manager.addCoins(20)
+
+        XCTAssertEqual(manager.coins, 111)
+        XCTAssertEqual(manager.persistenceStatus, .failed(.readBackVerificationFailed(path: store.primaryURL.path)))
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previousProgress
+        )
+    }
+
+    func testFailedBooleanMutationsDoNotReportSuccess() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+
+        store.failurePoint = .replacePrimary
+        XCTAssertFalse(manager.spendCoins(10))
+        XCTAssertEqual(manager.coins, PlayerProgress.default.coins)
+
+        store.failurePoint = .replacePrimary
+        XCTAssertNil(manager.claimDailyReward())
+        XCTAssertEqual(manager.coins, PlayerProgress.default.coins)
+    }
+
+    func testImportTransactionCompletesExactlyOnceAndRejectsConflicts() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        var importedProgress = PlayerProgress.default
+        importedProgress.coins = 888
+        let request = try PlayerProgressImportRequest(
+            identifier: "legacy-import",
+            sourceFingerprint: "snapshot-1",
+            progress: importedProgress
+        )
+
+        XCTAssertEqual(try manager.importProgress(request), .imported)
+        XCTAssertEqual(manager.coins, 888)
+        let pendingMarkerIndex = try XCTUnwrap(store.operations.firstIndex(of: "replaceMarker"))
+        let primaryIndex = try XCTUnwrap(store.operations.firstIndex(of: "replacePrimary"))
+        let completedMarkerIndex = try XCTUnwrap(store.operations.lastIndex(of: "replaceMarker"))
+        XCTAssertLessThan(pendingMarkerIndex, primaryIndex)
+        XCTAssertLessThan(primaryIndex, completedMarkerIndex)
+        XCTAssertEqual(try manager.importProgress(request), .alreadyImported)
+
+        let conflictingRequest = try PlayerProgressImportRequest(
+            identifier: "legacy-import",
+            sourceFingerprint: "snapshot-2",
+            progress: PlayerProgress.default
+        )
+        XCTAssertThrowsError(try manager.importProgress(conflictingRequest)) { error in
+            XCTAssertEqual(error as? PersistenceError, .conflictingImport(identifier: "legacy-import"))
+        }
+        XCTAssertEqual(manager.coins, 888)
+    }
+
+    func testCompletedImportCannotAcknowledgeARevertedDestination() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        var importedProgress = PlayerProgress.default
+        importedProgress.coins = 888
+        let request = try PlayerProgressImportRequest(
+            identifier: "completed-import",
+            sourceFingerprint: "snapshot-1",
+            progress: importedProgress
+        )
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(previousProgress),
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: request.identifier,
+                    sourceFingerprint: request.sourceFingerprint,
+                    state: .completed,
+                    hadPrimary: true,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: importedProgress,
+                    previousProgress: previousProgress
+                )
+            )
+        )
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .readBackVerificationFailed(path: store.primaryURL.path)
+            )
+        }
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previousProgress
+        )
+    }
+
+    func testFailedImportNeverWritesCompletionMarker() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        var importedProgress = PlayerProgress.default
+        importedProgress.coins = 888
+        let request = try PlayerProgressImportRequest(
+            identifier: "failed-import",
+            sourceFingerprint: "snapshot-1",
+            progress: importedProgress
+        )
+        store.failurePoint = .replacePrimary
+
+        XCTAssertThrowsError(try manager.importProgress(request))
+        XCTAssertNil(store.transactionMarkerData)
+        XCTAssertEqual(store.operations.filter { $0 == "replaceMarker" }.count, 1)
+        XCTAssertEqual(manager.progress, .default)
+    }
+
+    func testFailedImportPreservesPrimaryWhenBackupWasNotUpdated() throws {
+        var previousProgress = PlayerProgress.default
+        previousProgress.coins = 111
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(previousProgress)
+        )
+        let manager = try makeManager(store: store)
+        var importedProgress = PlayerProgress.default
+        importedProgress.coins = 888
+        let request = try PlayerProgressImportRequest(
+            identifier: "failed-existing-import",
+            sourceFingerprint: "snapshot-1",
+            progress: importedProgress
+        )
+        store.failurePoint = .replacePrimary
+
+        XCTAssertThrowsError(try manager.importProgress(request)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .writeFailed(path: store.primaryURL.path, reason: "Injected failure")
+            )
+        }
+        XCTAssertNil(store.transactionMarkerData)
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previousProgress
+        )
+    }
+
+    func testPreferencesSupportLegacyDataAndVersionedStoreWrites() throws {
+        let store = FakePersistenceStore(
+            primaryData: try PropertyListEncoder().encode(UserPreferences(hapticsEnabled: false))
+        )
+
+        XCTAssertEqual(try UserPreferencesLoader.load(from: store), UserPreferences(hapticsEnabled: false))
+
+        try UserPreferencesLoader.write(
+            preferences: UserPreferences(hapticsEnabled: true),
+            to: store
+        )
+
+        let propertyList = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: try XCTUnwrap(store.primaryData), options: [], format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(propertyList["schemaVersion"] as? Int, QuizEnginePersistenceSchema.current)
+        XCTAssertEqual(try UserPreferencesLoader.load(from: store), UserPreferences(hapticsEnabled: true))
+    }
+
+    func testPreferencesRecoverFromValidBackupWhenPrimaryIsMalformed() throws {
+        let preferences = UserPreferences(hapticsEnabled: false)
+        let store = FakePersistenceStore(
+            primaryData: Data("corrupt".utf8),
+            backupData: try PersistenceDocumentCodec.encode(preferences)
+        )
+
+        XCTAssertEqual(try UserPreferencesLoader.load(from: store), preferences)
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                UserPreferences.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            preferences
+        )
+    }
+
+    func testPreferencesReadBackFailureRestoresPreviousValue() throws {
+        let previous = UserPreferences(hapticsEnabled: false)
+        let replacement = UserPreferences(hapticsEnabled: true)
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(previous)
+        )
+        store.readBackOverride = try PersistenceDocumentCodec.encode(previous)
+
+        XCTAssertThrowsError(try UserPreferencesLoader.write(preferences: replacement, to: store)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .readBackVerificationFailed(path: store.primaryURL.path)
+            )
+        }
+        XCTAssertEqual(
+            try PersistenceDocumentCodec.decode(
+                UserPreferences.self,
+                from: try XCTUnwrap(store.primaryData),
+                path: store.primaryURL.path
+            ).payload,
+            previous
+        )
+    }
+
+    func testPreferencesUseFreshStateWhenPrimaryIsMissing() throws {
+        let preferences = UserPreferences(hapticsEnabled: false)
+        let backupData = try PersistenceDocumentCodec.encode(preferences)
+        let store = FakePersistenceStore(backupData: backupData)
+
+        XCTAssertEqual(try UserPreferencesLoader.load(from: store), UserPreferences(hapticsEnabled: true))
+        XCTAssertNil(store.primaryData)
+        XCTAssertEqual(store.backupData, backupData)
+    }
+
+    func testUnsupportedSchemaIsTypedAndDoesNotLoadAsDefault() throws {
+        let data = try PropertyListEncoder().encode(
+            PersistenceEnvelope(schemaVersion: 999, payload: PlayerProgress.default)
+        )
+        let store = FakePersistenceStore(primaryData: data)
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .unsupportedSchema(path: store.primaryURL.path, version: 999)
+            )
+        }
+    }
+
+    func testImportRequestRejectsMissingIdentityFields() {
+        XCTAssertThrowsError(
+            try PlayerProgressImportRequest(
+                identifier: "",
+                sourceFingerprint: "fingerprint",
+                progress: .default
+            )
+        ) { error in
+            XCTAssertEqual(error as? PersistenceError, .invalidImportRequest)
+        }
+
+        XCTAssertThrowsError(
+            try PlayerProgressImportRequest(
+                identifier: " \n",
+                sourceFingerprint: "fingerprint",
+                progress: .default
+            )
+        ) { error in
+            XCTAssertEqual(error as? PersistenceError, .invalidImportRequest)
+        }
+    }
+
+    func testMalformedImportMarkerDoesNotRecoverOrProceed() throws {
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(PlayerProgress.default),
+            transactionMarkerData: try PropertyListEncoder().encode(
+                ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: " ",
+                    sourceFingerprint: "fingerprint",
+                    state: .pending,
+                    hadPrimary: true,
+                    timestamp: Date(timeIntervalSinceReferenceDate: 10),
+                    targetProgress: .default,
+                    previousProgress: .default
+                )
+            )
+        )
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .malformedImportMarker(path: store.transactionMarkerURL.path)
+            )
+        }
+        XCTAssertNotNil(store.transactionMarkerData)
+    }
+
     private var utcCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -310,11 +982,13 @@ final class QuizEngineCoreTests: XCTestCase {
         return progress
     }
 
-    private func temporaryProgressURL() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("player_progress.plist")
+    private func makeManager(store: any QuizEnginePersistenceStore) throws -> PlayerProgressManager {
+        try PlayerProgressManager(
+            variant: try makeAlternateVariant(),
+            questionDataService: service,
+            persistenceStore: store,
+            clock: TestClock(now: Date(timeIntervalSinceReferenceDate: 0))
+        )
     }
 }
 

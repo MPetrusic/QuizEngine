@@ -20,7 +20,7 @@ An app can build custom views around the public Core models. It must not duplica
 
 ## App composition
 
-Create the variant once at startup, then create one question service and inject it everywhere. `PlayerProgressManager` persists to `Documents/player_progress.plist` by default.
+Create the variant once at startup, then create one question service and inject it everywhere. `PlayerProgressManager` persists to `Documents/player_progress.plist` by default through a versioned, atomic `FileQuizEnginePersistenceStore`. The store keeps a sibling backup and import marker, and verifies every replacement by reading it back.
 
 ```swift
 let variant = try QuizVariantDefinition(
@@ -36,6 +36,8 @@ let progress = PlayerProgressManager(
     purchaseStatus: MyPurchaseStatusAdapter()
 )
 ```
+
+Existing URL-based initializers remain compatible. Apps that need typed load and write failures should inject a `QuizEnginePersistenceStore` through the throwing initializer and handle `PersistenceError` explicitly. A public `PlayerProgressImportRequest` provides an exactly-once, marker-backed import transaction for app-owned legacy migration planners.
 
 Do not create a second `QuestionDataService` with another file or bundle. Category totals, completion, unlocks, achievements, and sessions must refer to the same content set.
 

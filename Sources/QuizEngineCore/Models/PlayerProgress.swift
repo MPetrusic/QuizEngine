@@ -178,7 +178,7 @@ public struct HourlyPerformance: Codable, Equatable, Sendable {
 // MARK: - Category Statistics
 
 /// Tracks user progress within a specific category
-public struct CategoryStat: Codable, Sendable {
+public struct CategoryStat: Codable, Equatable, Sendable {
     /// Total number of questions answered in this category (includes wrong answers)
     public var questionsAnswered: Int
 
@@ -232,7 +232,7 @@ public struct CategoryStat: Codable, Sendable {
 
 // MARK: - Player Progress
 
-public struct PlayerProgress: Codable, Sendable {
+public struct PlayerProgress: Codable, Equatable, Sendable {
     public var coins: Int
     public var currentStreak: Int
     public var longestStreak: Int

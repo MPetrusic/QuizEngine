@@ -15,7 +15,7 @@ Use the smallest product set your app needs:
 Add the public package at the exact validated release:
 
 ```swift
-.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.1.3")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.0")
 ```
 
 No repository credentials are required. Pin an exact release tag; do not use a moving branch as a production dependency.
@@ -29,6 +29,8 @@ Open [StarterQuiz](Examples/StarterQuiz/README.md) for a minimal runnable iOS ap
 | quiz rules, scoring, game state, progress, unlock evaluation, achievement evaluation, persistence format | questions, localizations, views, theme, images, icons, analytics, ads, purchases, leaderboards, entitlements, SDK setup, multiplayer transports |
 
 Firebase, Google Mobile Ads, StoreKit, Game Center, MultipeerConnectivity, their IDs, and their capabilities do not belong in this package.
+
+Persistence is owned by `QuizEngineCore`. New writes use a versioned schema-1 envelope, atomic sibling-file replacement, a backup, and read-back verification. Existing unversioned progress and preference plists remain readable as legacy schema 0. Use the throwing store-based APIs when the app must present typed corruption, storage, or recovery failures; the existing URL-based APIs remain source-compatible, with manager failures exposed through persistence status.
 
 ## Required composition
 
@@ -65,7 +67,7 @@ QuizEngine keeps production defaults for consumers, but its time, calendar, rand
 - `QuizEngineClock` and an explicit `Calendar` control date, time-zone, streak, cooldown, and statistics behavior.
 - `RandomNumberGenerator` injection controls question, answer, seed, and ad-selection randomness.
 - `QuizEngineScheduler` controls delayed game and multiplayer work. Tests can manually advance a scheduler instead of sleeping.
-- `PlayerProgressManager` and `UserPreferencesLoader` accept temporary persistence URLs for isolated tests.
+- `PlayerProgressManager` and `UserPreferencesLoader` accept injected persistence stores and temporary persistence URLs for isolated tests.
 - Existing provider protocols accept fake analytics, ads, purchases, haptics, leaderboards, and transports.
 
 The package's `QuizEngineTestSupport` target is test-only and is not exposed as a library product. It supplies reusable clocks, schedulers, temporary persistence, provider fakes, transport fakes, and fixtures for the package test targets.

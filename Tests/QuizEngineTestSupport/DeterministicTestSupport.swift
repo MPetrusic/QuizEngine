@@ -102,9 +102,27 @@ public final class TemporaryPersistence: @unchecked Sendable {
     public let preferencesURL: URL
 
     public init() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("QuizEngineTest-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileManager = FileManager.default
+        let baseDirectory = fileManager.temporaryDirectory
+        let processID = ProcessInfo.processInfo.processIdentifier
+        var index = 0
+        let directory: URL
+
+        while true {
+            let candidate = baseDirectory
+                .appendingPathComponent("QuizEngineTest-\(processID)-\(index)", isDirectory: true)
+            do {
+                try fileManager.createDirectory(at: candidate, withIntermediateDirectories: false)
+                directory = candidate
+                break
+            } catch {
+                guard fileManager.fileExists(atPath: candidate.path) else {
+                    throw error
+                }
+                index += 1
+            }
+        }
+
         directoryURL = directory
         progressURL = directory.appendingPathComponent("player_progress.plist")
         preferencesURL = directory.appendingPathComponent("user_preferences.plist")
@@ -112,6 +130,131 @@ public final class TemporaryPersistence: @unchecked Sendable {
 
     deinit {
         try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
+
+public enum FakePersistenceFailurePoint: Equatable, Sendable {
+    case readPrimary
+    case readBackup
+    case replacePrimary
+    case partialReplacePrimary
+    case insufficientStorage
+    case restoreBackup
+    case removePrimary
+    case readMarker
+    case replaceMarker
+    case removeMarker
+}
+
+/// An in-memory store with deterministic failure injection for persistence tests.
+public final class FakePersistenceStore: QuizEnginePersistenceStore, @unchecked Sendable {
+    public let primaryURL: URL
+    public let backupURL: URL
+    public let transactionMarkerURL: URL
+
+    public var primaryData: Data?
+    public var backupData: Data?
+    public var transactionMarkerData: Data?
+    public var readBackOverride: Data?
+    public var failurePoint: FakePersistenceFailurePoint?
+    public private(set) var operations: [String] = []
+
+    public init(
+        primaryData: Data? = nil,
+        backupData: Data? = nil,
+        transactionMarkerData: Data? = nil
+    ) {
+        let base = URL(fileURLWithPath: "/fake/quiz-engine-progress.plist")
+        primaryURL = base
+        backupURL = URL(fileURLWithPath: base.path + ".backup")
+        transactionMarkerURL = URL(fileURLWithPath: base.path + ".import-marker")
+        self.primaryData = primaryData
+        self.backupData = backupData
+        self.transactionMarkerData = transactionMarkerData
+    }
+
+    public func readPrimary() throws -> Data? {
+        try failIfNeeded(.readPrimary)
+        operations.append("readPrimary")
+        let replacementHasStarted = operations.contains("replacePrimary") ||
+            operations.contains("partialReplacePrimary")
+        return replacementHasStarted ? (readBackOverride ?? primaryData) : primaryData
+    }
+
+    public func readBackup() throws -> Data? {
+        try failIfNeeded(.readBackup)
+        operations.append("readBackup")
+        return backupData
+    }
+
+    public func replacePrimary(with data: Data) throws {
+        if failurePoint == .partialReplacePrimary {
+            failurePoint = nil
+            operations.append("partialReplacePrimary")
+            backupData = primaryData
+            primaryData = data
+            throw PersistenceError.writeFailed(path: primaryURL.path, reason: "Injected partial replacement failure")
+        }
+        try failIfNeeded(.replacePrimary)
+        try failIfNeeded(.insufficientStorage)
+        operations.append("replacePrimary")
+        backupData = primaryData
+        primaryData = data
+    }
+
+    public func restoreBackup() throws {
+        try failIfNeeded(.restoreBackup)
+        operations.append("restoreBackup")
+        guard let backupData else {
+            throw PersistenceError.backupUnavailable(path: backupURL.path)
+        }
+        primaryData = backupData
+        readBackOverride = nil
+    }
+
+    public func removePrimary() throws {
+        try failIfNeeded(.removePrimary)
+        operations.append("removePrimary")
+        primaryData = nil
+    }
+
+    public func readTransactionMarker() throws -> Data? {
+        try failIfNeeded(.readMarker)
+        operations.append("readMarker")
+        return transactionMarkerData
+    }
+
+    public func replaceTransactionMarker(with data: Data) throws {
+        try failIfNeeded(.replaceMarker)
+        operations.append("replaceMarker")
+        transactionMarkerData = data
+    }
+
+    public func removeTransactionMarker() throws {
+        try failIfNeeded(.removeMarker)
+        operations.append("removeMarker")
+        transactionMarkerData = nil
+    }
+
+    private func failIfNeeded(_ point: FakePersistenceFailurePoint) throws {
+        guard failurePoint == point else { return }
+        failurePoint = nil
+        switch point {
+        case .readPrimary, .readBackup, .readMarker:
+            throw PersistenceError.readFailed(path: primaryURL.path, reason: "Injected failure")
+        case .replacePrimary:
+            throw PersistenceError.writeFailed(path: primaryURL.path, reason: "Injected failure")
+        case .partialReplacePrimary:
+            fatalError("Handled before failIfNeeded")
+        case .insufficientStorage:
+            throw PersistenceError.insufficientStorage(path: primaryURL.path)
+        case .restoreBackup:
+            throw PersistenceError.backupRecoveryFailed(path: backupURL.path, reason: "Injected failure")
+        case .removePrimary, .removeMarker:
+            throw PersistenceError.writeFailed(path: primaryURL.path, reason: "Injected failure")
+        case .replaceMarker:
+            throw PersistenceError.importMarkerWriteFailed(path: transactionMarkerURL.path, reason: "Injected failure")
+        }
     }
 }
 

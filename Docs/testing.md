@@ -9,8 +9,8 @@ Use the additive dependency parameters on the Core, Game, and Multiplayer initia
 - `QuizEngineClock` supplies `now`; pass a calendar with the desired time zone to progress APIs.
 - `RandomNumberGenerator` supplies deterministic question, answer, seed, and ad-selection decisions.
 - `QuizEngineScheduler` supplies delayed main-actor work. The test scheduler advances pending work explicitly.
-- `PlayerProgressManager` receives a temporary `persistenceURL`.
-- `UserPreferencesLoader.load(from:)` and `write(preferences:to:)` use an isolated preference URL.
+- `PlayerProgressManager` and `UserPreferencesLoader` receive an injected `QuizEnginePersistenceStore` or temporary persistence URL.
+- The store fake can deterministically fail primary reads, backup reads, atomic replacement, marker writes, recovery, and removal, and can return mismatched read-back data.
 - Provider protocols receive test doubles rather than SDK-backed implementations.
 
 The default initializer values preserve the production behavior used by existing consumers.
@@ -27,4 +27,4 @@ The default initializer values preserve the production behavior used by existing
 
 Use `TestScheduler.advance(by:)` or `runNext()` to drive delayed work. Do not add `sleep`, `Task.sleep`, polling, or arbitrary delays to tests.
 
-QE-0 does not define schema versions, atomic persistence, backup/recovery, or migration transactions. Those belong to QE-1.
+Persistence tests must cover schema-0 compatibility, schema-1 writes, malformed primary and backup data, backup recovery, interrupted replacement, low storage, read-back mismatch, marker ordering, repeated imports, conflicting imports, and preference reloads. `PlayerProgressImportRequest` is package-generic; legacy source mapping remains app-owned.
