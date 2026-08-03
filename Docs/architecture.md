@@ -39,6 +39,10 @@ let progress = PlayerProgressManager(
 
 Existing URL-based initializers remain compatible. Apps that need typed load and write failures should inject a `QuizEnginePersistenceStore` through the throwing initializer and handle `PersistenceError` explicitly. A public `PlayerProgressImportRequest` provides an exactly-once, marker-backed import transaction for app-owned legacy migration planners.
 
+Power-up credits live in `PlayerProgress`, keyed by `PowerUp`; they are not app preferences or coin equivalents. Apps query balances and affordability through `PlayerProgressManager`, then call `consumePowerUp(_:)`. That operation spends one free credit before coins and atomically persists the funding deduction with power-up usage. `PowerUpSpendResult` exposes `.freeCredit` or `.coins` plus the actual coin amount to the game layer.
+
+Legacy inventory mapping stays app-owned. Build the complete target `PlayerProgress` with legacy hint quantities mapped to `.fiftyFifty` credits and legacy skip quantities mapped to `.skipQuestion` credits, then submit it through `PlayerProgressImportRequest`. Do not convert those quantities to coins.
+
 Do not create a second `QuestionDataService` with another file or bundle. Category totals, completion, unlocks, achievements, and sessions must refer to the same content set.
 
 ## Serbian Quiz is a reference, not a template

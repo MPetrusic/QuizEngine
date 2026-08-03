@@ -19,6 +19,7 @@ public protocol AnalyticsProvider: AnyObject, Sendable {
     // MARK: - Power-Up Events
 
     func logPowerUpUsed(type: PowerUp, coinsSpent: Int)
+    func logPowerUpUsed(type: PowerUp, fundingSource: PowerUpFundingSource, coinsSpent: Int)
 
     // MARK: - Extra Life Events
 
@@ -58,6 +59,9 @@ public extension AnalyticsProvider {
     func logGameStarted(category: String?, mode: GameMode) {}
     func logGameEnded(score: Int, livesRemaining: Int, questionsAnswered: Int, coinsEarned: Int, category: String?, mode: GameMode) {}
     func logPowerUpUsed(type: PowerUp, coinsSpent: Int) {}
+    func logPowerUpUsed(type: PowerUp, fundingSource: PowerUpFundingSource, coinsSpent: Int) {
+        logPowerUpUsed(type: type, coinsSpent: coinsSpent)
+    }
     func logExtraLifeUsed(method: ExtraLifeMethod) {}
     func logDailyRewardClaimed(streakDay: Int, amount: Int) {}
     func logCoinPurchase(productId: String, coinsReceived: Int) {}

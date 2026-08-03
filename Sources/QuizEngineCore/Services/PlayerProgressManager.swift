@@ -184,6 +184,9 @@ public class PlayerProgressManager: ObservableObject {
                     }
 
                     if existingMarker.state == .completed {
+                        guard existingMarker.targetProgress == request.progress else {
+                            throw PersistenceError.conflictingImport(identifier: request.identifier)
+                        }
                         try validateCompletedImport(existingMarker)
                         persistenceStatus = .alreadyImported
                         lastPersistenceError = nil
@@ -767,6 +770,76 @@ public class PlayerProgressManager: ObservableObject {
         return progress.coins >= amount
     }
 
+    // MARK: - Power-Up Wallet
+
+    /// Returns the number of free activations available for a power-up.
+    public func powerUpCredits(for powerUp: PowerUp) -> Int {
+        progress.powerUpCredits[powerUp] ?? 0
+    }
+
+    /// Adds free activations without changing the coin balance.
+    @discardableResult
+    public func grantPowerUpCredits(_ amount: Int, for powerUp: PowerUp) -> Bool {
+        guard amount > 0 else { return false }
+        let currentBalance = powerUpCredits(for: powerUp)
+        guard currentBalance >= 0 else { return false }
+        let (newBalance, overflow) = currentBalance.addingReportingOverflow(amount)
+        guard !overflow else { return false }
+
+        progress.powerUpCredits[powerUp] = newBalance
+        return save()
+    }
+
+    /// Returns whether a free credit or the package-defined coin cost can fund the power-up.
+    public func canFundPowerUp(_ powerUp: PowerUp) -> Bool {
+        let creditBalance = powerUpCredits(for: powerUp)
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        guard creditBalance >= 0, usageCount >= 0, usageCount < Int.max else {
+            return false
+        }
+        if creditBalance > 0 {
+            return true
+        }
+        guard progress.coins >= powerUp.cost else { return false }
+        return !progress.totalCoinsSpent.addingReportingOverflow(powerUp.cost).overflow
+    }
+
+    /// Consumes a free credit before coins and persists funding and usage as one transaction.
+    @discardableResult
+    public func consumePowerUp(_ powerUp: PowerUp) -> PowerUpSpendResult? {
+        let result: PowerUpSpendResult
+        let creditBalance = powerUpCredits(for: powerUp)
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        let (newUsageCount, usageOverflow) = usageCount.addingReportingOverflow(1)
+        guard usageCount >= 0, !usageOverflow else { return nil }
+
+        if creditBalance > 0 {
+            progress.powerUpCredits[powerUp] = creditBalance - 1
+            result = PowerUpSpendResult(
+                powerUp: powerUp,
+                fundingSource: .freeCredit,
+                coinsSpent: 0
+            )
+        } else {
+            guard creditBalance == 0, progress.coins >= powerUp.cost else {
+                return nil
+            }
+            let (newTotalCoinsSpent, spendingOverflow) = progress.totalCoinsSpent.addingReportingOverflow(powerUp.cost)
+            guard !spendingOverflow else { return nil }
+            progress.coins -= powerUp.cost
+            progress.totalCoinsSpent = newTotalCoinsSpent
+            result = PowerUpSpendResult(
+                powerUp: powerUp,
+                fundingSource: .coins,
+                coinsSpent: powerUp.cost
+            )
+        }
+
+        recordPowerUpUsage(powerUp, newUsageCount: newUsageCount)
+        guard save() else { return nil }
+        return result
+    }
+
     /// Marks that the 500 premium bonus coins have been received.
     /// Call after awarding to prevent duplicate grants.
     public func markPremiumBonusCoinsReceived() {
@@ -977,21 +1050,16 @@ public class PlayerProgressManager: ObservableObject {
     /// Records that a power-up was used (called when power-up is activated)
     /// - Parameter powerUp: The power-up that was used
     public func recordPowerUpUsed(_ powerUp: PowerUp) {
-        let key: String
-        switch powerUp {
-        case .fiftyFifty:
-            key = "fiftyFifty"
-        case .skipQuestion:
-            key = "skipQuestion"
-        case .timeFreeze:
-            key = "timeFreeze"
-        case .streakShield:
-            key = "streakShield"
-        }
-
-        progress.powerUpTypesUsed.insert(key)
-        progress.lifetimePowerUpsUsed = (progress.lifetimePowerUpsUsed ?? 0) + 1
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        let (newUsageCount, overflow) = usageCount.addingReportingOverflow(1)
+        guard usageCount >= 0, !overflow else { return }
+        recordPowerUpUsage(powerUp, newUsageCount: newUsageCount)
         save()
+    }
+
+    private func recordPowerUpUsage(_ powerUp: PowerUp, newUsageCount: Int) {
+        progress.powerUpTypesUsed.insert(powerUp.rawValue)
+        progress.lifetimePowerUpsUsed = newUsageCount
     }
 
     // MARK: - Multiplayer Result Recording

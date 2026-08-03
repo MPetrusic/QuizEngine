@@ -243,6 +243,9 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
     public var totalCoinsEarned: Int
     public var totalCoinsSpent: Int
 
+    /// Free activations available for each power-up. Missing entries mean zero credits.
+    public var powerUpCredits: [PowerUp: Int]
+
     // MARK: - Phase 2 Category Progress Tracking
 
     /// Category-specific statistics (Phase 2D)
@@ -383,7 +386,8 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         longestMultiplayerWinStreak: Int = 0,
         multiplayerTotalResponseTimeMs: Int = 0,
         multiplayerTotalQuestionsAnswered: Int = 0,
-        multiplayerTotalQuestionsCorrect: Int = 0
+        multiplayerTotalQuestionsCorrect: Int = 0,
+        powerUpCredits: [PowerUp: Int] = [:]
     ) {
         self.coins = coins
         self.currentStreak = currentStreak
@@ -424,6 +428,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         self.multiplayerTotalResponseTimeMs = multiplayerTotalResponseTimeMs
         self.multiplayerTotalQuestionsAnswered = multiplayerTotalQuestionsAnswered
         self.multiplayerTotalQuestionsCorrect = multiplayerTotalQuestionsCorrect
+        self.powerUpCredits = powerUpCredits
     }
 
     public static let `default` = PlayerProgress(
@@ -455,7 +460,8 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         previousAppOpenDate: nil,
         currentPlayStreak: 0,
         longestPlayStreak: 0,
-        lastPlayedDate: nil
+        lastPlayedDate: nil,
+        powerUpCredits: [:]
     )
 
     // MARK: - Custom Codable (Backward Compatibility)
@@ -474,6 +480,14 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         lastDailyRewardClaimedDate = try container.decodeIfPresent(Date.self, forKey: .lastDailyRewardClaimedDate)
         totalCoinsEarned = try container.decodeIfPresent(Int.self, forKey: .totalCoinsEarned) ?? 100
         totalCoinsSpent = try container.decodeIfPresent(Int.self, forKey: .totalCoinsSpent) ?? 0
+        powerUpCredits = try container.decodeIfPresent([PowerUp: Int].self, forKey: .powerUpCredits) ?? [:]
+        guard powerUpCredits.values.allSatisfy({ $0 >= 0 }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .powerUpCredits,
+                in: container,
+                debugDescription: "Power-up credit balances cannot be negative."
+            )
+        }
 
         // Category progress
         categoryStats = try container.decodeIfPresent([String: CategoryStat].self, forKey: .categoryStats) ?? [:]

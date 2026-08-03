@@ -185,6 +185,117 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertEqual(decoded.manuallyUnlockedCategories, ["legacy_category"])
         XCTAssertEqual(decoded.lifetimeGamesPlayed, 9)
         XCTAssertEqual(decoded.multiplayerGamesPlayed, 0)
+        XCTAssertTrue(decoded.powerUpCredits.isEmpty)
+    }
+
+    func testPowerUpCreditsAreIndependentAndConsumedBeforeCoins() throws {
+        let manager = try makeManager(store: FakePersistenceStore())
+
+        for powerUp in PowerUp.allCases {
+            XCTAssertTrue(manager.grantPowerUpCredits(1, for: powerUp))
+            XCTAssertEqual(manager.powerUpCredits(for: powerUp), 1)
+        }
+
+        for powerUp in PowerUp.allCases {
+            XCTAssertEqual(
+                manager.consumePowerUp(powerUp),
+                PowerUpSpendResult(
+                    powerUp: powerUp,
+                    fundingSource: .freeCredit,
+                    coinsSpent: 0
+                )
+            )
+            XCTAssertEqual(manager.powerUpCredits(for: powerUp), 0)
+        }
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, 0)
+
+        XCTAssertEqual(
+            manager.consumePowerUp(.fiftyFifty),
+            PowerUpSpendResult(
+                powerUp: .fiftyFifty,
+                fundingSource: .coins,
+                coinsSpent: PowerUp.fiftyFifty.cost
+            )
+        )
+        XCTAssertEqual(manager.coins, 100 - PowerUp.fiftyFifty.cost)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, PowerUp.fiftyFifty.cost)
+        XCTAssertEqual(manager.progress.lifetimePowerUpsUsed, 5)
+    }
+
+    func testPowerUpConsumptionFailsWhenCreditsAndCoinsAreUnavailable() throws {
+        let manager = try makeManager(store: FakePersistenceStore())
+        XCTAssertTrue(manager.spendCoins(manager.coins))
+
+        XCTAssertFalse(manager.canFundPowerUp(.skipQuestion))
+        XCTAssertNil(manager.consumePowerUp(.skipQuestion))
+        XCTAssertEqual(manager.coins, 0)
+        XCTAssertEqual(manager.powerUpCredits(for: .skipQuestion), 0)
+        XCTAssertNil(manager.progress.lifetimePowerUpsUsed)
+    }
+
+    func testPowerUpCreditsSurviveSaveAndReload() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        XCTAssertTrue(manager.grantPowerUpCredits(3, for: .fiftyFifty))
+        XCTAssertTrue(manager.grantPowerUpCredits(4, for: .skipQuestion))
+
+        let reloaded = try makeManager(store: store)
+
+        XCTAssertEqual(reloaded.powerUpCredits(for: .fiftyFifty), 3)
+        XCTAssertEqual(reloaded.powerUpCredits(for: .skipQuestion), 4)
+        XCTAssertEqual(reloaded.powerUpCredits(for: .timeFreeze), 0)
+        XCTAssertEqual(reloaded.coins, 100)
+    }
+
+    func testPowerUpCreditGrantRejectsInvalidAmountsAndOverflow() throws {
+        var maxCreditProgress = PlayerProgress.default
+        maxCreditProgress.powerUpCredits[.skipQuestion] = Int.max
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(maxCreditProgress)
+        )
+        let manager = try makeManager(store: store)
+
+        XCTAssertFalse(manager.grantPowerUpCredits(0, for: .skipQuestion))
+        XCTAssertFalse(manager.grantPowerUpCredits(-1, for: .skipQuestion))
+        XCTAssertFalse(manager.grantPowerUpCredits(1, for: .skipQuestion))
+        XCTAssertEqual(manager.powerUpCredits(for: .skipQuestion), Int.max)
+        XCTAssertEqual(manager.coins, 100)
+    }
+
+    func testVersionedProgressWithoutPowerUpCreditsDefaultsToEmptyWallet() throws {
+        let encoded = try PersistenceDocumentCodec.encode(PlayerProgress.default)
+        var document = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: encoded, options: [], format: nil) as? [String: Any]
+        )
+        var payload = try XCTUnwrap(document["payload"] as? [String: Any])
+        payload.removeValue(forKey: "powerUpCredits")
+        document["payload"] = payload
+        let legacySchemaOneData = try PropertyListSerialization.data(
+            fromPropertyList: document,
+            format: .binary,
+            options: 0
+        )
+
+        let manager = try makeManager(store: FakePersistenceStore(primaryData: legacySchemaOneData))
+
+        XCTAssertEqual(manager.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertTrue(manager.progress.powerUpCredits.isEmpty)
+    }
+
+    func testNegativePersistedPowerUpCreditIsRejectedAsMalformed() throws {
+        var invalidProgress = PlayerProgress.default
+        invalidProgress.powerUpCredits[.fiftyFifty] = -1
+        let store = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(invalidProgress)
+        )
+
+        XCTAssertThrowsError(try makeManager(store: store)) { error in
+            XCTAssertEqual(
+                error as? PersistenceError,
+                .malformedData(path: store.primaryURL.path)
+            )
+        }
     }
 
     func testQuestionSelectionUsesInjectedRandomNumberGenerator() throws {
@@ -650,6 +761,76 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    func testFailedPowerUpPersistenceRollsBackCreditCoinAndUsageMutations() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        XCTAssertTrue(manager.grantPowerUpCredits(1, for: .fiftyFifty))
+
+        store.failurePoint = .replacePrimary
+        XCTAssertNil(manager.consumePowerUp(.fiftyFifty))
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 1)
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, 0)
+        XCTAssertNil(manager.progress.lifetimePowerUpsUsed)
+        XCTAssertFalse(manager.progress.powerUpTypesUsed.contains(PowerUp.fiftyFifty.rawValue))
+
+        store.failurePoint = .replacePrimary
+        XCTAssertNil(manager.consumePowerUp(.timeFreeze))
+        XCTAssertEqual(manager.powerUpCredits(for: .timeFreeze), 0)
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, 0)
+        XCTAssertNil(manager.progress.lifetimePowerUpsUsed)
+        XCTAssertFalse(manager.progress.powerUpTypesUsed.contains(PowerUp.timeFreeze.rawValue))
+    }
+
+    func testPowerUpReadBackMismatchRollsBackCreditAndUsage() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        XCTAssertTrue(manager.grantPowerUpCredits(1, for: .skipQuestion))
+        let persistedBeforeConsumption = try XCTUnwrap(store.primaryData)
+        store.readBackOverride = persistedBeforeConsumption
+
+        XCTAssertNil(manager.consumePowerUp(.skipQuestion))
+
+        XCTAssertEqual(manager.powerUpCredits(for: .skipQuestion), 1)
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, 0)
+        XCTAssertNil(manager.progress.lifetimePowerUpsUsed)
+        XCTAssertEqual(
+            manager.lastPersistenceError,
+            .readBackVerificationFailed(path: store.primaryURL.path)
+        )
+    }
+
+    func testPowerUpConsumptionRejectsCounterOverflowWithoutMutation() throws {
+        var usageOverflowProgress = PlayerProgress.default
+        usageOverflowProgress.powerUpCredits[.fiftyFifty] = 1
+        usageOverflowProgress.lifetimePowerUpsUsed = Int.max
+        let usageStore = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(usageOverflowProgress)
+        )
+        let usageManager = try makeManager(store: usageStore)
+
+        XCTAssertFalse(usageManager.canFundPowerUp(.fiftyFifty))
+        XCTAssertNil(usageManager.consumePowerUp(.fiftyFifty))
+        XCTAssertEqual(usageManager.powerUpCredits(for: .fiftyFifty), 1)
+        XCTAssertEqual(usageManager.progress.lifetimePowerUpsUsed, Int.max)
+        XCTAssertEqual(usageManager.coins, 100)
+
+        var spendingOverflowProgress = PlayerProgress.default
+        spendingOverflowProgress.totalCoinsSpent = Int.max
+        let spendingStore = FakePersistenceStore(
+            primaryData: try PersistenceDocumentCodec.encode(spendingOverflowProgress)
+        )
+        let spendingManager = try makeManager(store: spendingStore)
+
+        XCTAssertFalse(spendingManager.canFundPowerUp(.timeFreeze))
+        XCTAssertNil(spendingManager.consumePowerUp(.timeFreeze))
+        XCTAssertEqual(spendingManager.coins, 100)
+        XCTAssertEqual(spendingManager.progress.totalCoinsSpent, Int.max)
+        XCTAssertNil(spendingManager.progress.lifetimePowerUpsUsed)
+    }
+
     func testFailedBooleanMutationsDoNotReportSuccess() throws {
         let store = FakePersistenceStore()
         let manager = try makeManager(store: store)
@@ -692,6 +873,75 @@ final class QuizEngineCoreTests: XCTestCase {
             XCTAssertEqual(error as? PersistenceError, .conflictingImport(identifier: "legacy-import"))
         }
         XCTAssertEqual(manager.coins, 888)
+    }
+
+    func testPowerUpCreditImportIsExactlyOnceAndNeverConvertsValueToCoins() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        XCTAssertTrue(manager.grantPowerUpCredits(2, for: .timeFreeze))
+        var importedProgress = manager.progress
+        importedProgress.powerUpCredits[.fiftyFifty] = 7
+        importedProgress.powerUpCredits[.skipQuestion] = 9
+        let request = try PlayerProgressImportRequest(
+            identifier: "legacy-hint-skip-import",
+            sourceFingerprint: "hints-7-skips-9",
+            progress: importedProgress
+        )
+
+        XCTAssertEqual(try manager.importProgress(request), .imported)
+        XCTAssertEqual(try manager.importProgress(request), .alreadyImported)
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 7)
+        XCTAssertEqual(manager.powerUpCredits(for: .skipQuestion), 9)
+        XCTAssertEqual(manager.powerUpCredits(for: .timeFreeze), 2)
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsEarned, 100)
+        XCTAssertEqual(manager.progress.totalCoinsSpent, 0)
+
+        XCTAssertEqual(manager.consumePowerUp(.fiftyFifty)?.fundingSource, .freeCredit)
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 6)
+        XCTAssertEqual(try manager.importProgress(request), .alreadyImported)
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 6)
+        XCTAssertEqual(manager.coins, 100)
+
+        let reloaded = try makeManager(store: store)
+        XCTAssertEqual(reloaded.powerUpCredits(for: .fiftyFifty), 6)
+        XCTAssertEqual(reloaded.powerUpCredits(for: .skipQuestion), 9)
+        XCTAssertEqual(reloaded.coins, 100)
+    }
+
+    func testPowerUpCreditImportRejectsConflictingSourceOrTarget() throws {
+        let store = FakePersistenceStore()
+        let manager = try makeManager(store: store)
+        var importedProgress = manager.progress
+        importedProgress.powerUpCredits[.fiftyFifty] = 3
+        let request = try PlayerProgressImportRequest(
+            identifier: "power-up-credit-import",
+            sourceFingerprint: "snapshot-1",
+            progress: importedProgress
+        )
+        XCTAssertEqual(try manager.importProgress(request), .imported)
+
+        var conflictingProgress = importedProgress
+        conflictingProgress.powerUpCredits[.fiftyFifty] = 30
+        let conflictingSource = try PlayerProgressImportRequest(
+            identifier: request.identifier,
+            sourceFingerprint: "snapshot-2",
+            progress: conflictingProgress
+        )
+        XCTAssertThrowsError(try manager.importProgress(conflictingSource)) { error in
+            XCTAssertEqual(error as? PersistenceError, .conflictingImport(identifier: request.identifier))
+        }
+
+        let conflictingTarget = try PlayerProgressImportRequest(
+            identifier: request.identifier,
+            sourceFingerprint: request.sourceFingerprint,
+            progress: conflictingProgress
+        )
+        XCTAssertThrowsError(try manager.importProgress(conflictingTarget)) { error in
+            XCTAssertEqual(error as? PersistenceError, .conflictingImport(identifier: request.identifier))
+        }
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 3)
+        XCTAssertEqual(manager.coins, 100)
     }
 
     func testCompletedImportCannotAcknowledgeARevertedDestination() throws {
@@ -887,6 +1137,18 @@ final class QuizEngineCoreTests: XCTestCase {
                 identifier: " \n",
                 sourceFingerprint: "fingerprint",
                 progress: .default
+            )
+        ) { error in
+            XCTAssertEqual(error as? PersistenceError, .invalidImportRequest)
+        }
+
+        var negativeCredits = PlayerProgress.default
+        negativeCredits.powerUpCredits[.skipQuestion] = -1
+        XCTAssertThrowsError(
+            try PlayerProgressImportRequest(
+                identifier: "legacy-import",
+                sourceFingerprint: "fingerprint",
+                progress: negativeCredits
             )
         ) { error in
             XCTAssertEqual(error as? PersistenceError, .invalidImportRequest)

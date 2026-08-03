@@ -59,6 +59,7 @@ public class QuizViewModel: ObservableObject {
     @Published public private(set) var hiddenAnswerIndices: Set<Int> = []
     @Published public private(set) var isTimeFrozen = false
     @Published public private(set) var hasActiveStreakShield = false
+    @Published public private(set) var lastPowerUpFunding: PowerUpSpendResult?
     private var extraLifeUsed = false
 
     // MARK: - Phase 3 Session Statistics Tracking
@@ -344,6 +345,7 @@ public class QuizViewModel: ObservableObject {
         hiddenAnswerIndices = []
         isTimeFrozen = false
         hasActiveStreakShield = false
+        lastPowerUpFunding = nil
         extraLifeUsed = false
         correctAnswersInRow = 0
         shouldChangeBackground = false
@@ -558,17 +560,16 @@ public class QuizViewModel: ObservableObject {
 
     public func canUsePowerUp(_ powerUp: PowerUp) -> Bool {
         guard let manager = progressManager else { return false }
-        return !usedPowerUps.contains(powerUp) && manager.canAfford(powerUp.cost)
+        return !usedPowerUps.contains(powerUp) && manager.canFundPowerUp(powerUp)
     }
 
     public func useFiftyFifty() {
         guard canUsePowerUp(.fiftyFifty) else { return }
         guard questionNumber >= 0 else { return }
-        guard progressManager?.spendCoins(PowerUp.fiftyFifty.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.fiftyFifty) else { return }
 
         usedPowerUps.insert(.fiftyFifty)
-        progressManager?.recordPowerUpUsed(.fiftyFifty)
-        analytics?.logPowerUpUsed(type: .fiftyFifty, coinsSpent: PowerUp.fiftyFifty.cost)
+        recordPowerUpFunding(funding)
 
         let currentAnswers = questionData[questionNumber].answers
         let wrongIndices = currentAnswers.enumerated()
@@ -584,11 +585,10 @@ public class QuizViewModel: ObservableObject {
 
     public func useSkipQuestion() {
         guard canUsePowerUp(.skipQuestion) else { return }
-        guard progressManager?.spendCoins(PowerUp.skipQuestion.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.skipQuestion) else { return }
 
         usedPowerUps.insert(.skipQuestion)
-        progressManager?.recordPowerUpUsed(.skipQuestion)
-        analytics?.logPowerUpUsed(type: .skipQuestion, coinsSpent: PowerUp.skipQuestion.cost)
+        recordPowerUpFunding(funding)
         stopTimer()
         updateRemainingTime()
 
@@ -602,11 +602,10 @@ public class QuizViewModel: ObservableObject {
 
     public func useTimeFreeze() {
         guard canUsePowerUp(.timeFreeze) else { return }
-        guard progressManager?.spendCoins(PowerUp.timeFreeze.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.timeFreeze) else { return }
 
         usedPowerUps.insert(.timeFreeze)
-        progressManager?.recordPowerUpUsed(.timeFreeze)
-        analytics?.logPowerUpUsed(type: .timeFreeze, coinsSpent: PowerUp.timeFreeze.cost)
+        recordPowerUpFunding(funding)
         isTimeFrozen = true
         stopTimer()
 
@@ -627,12 +626,20 @@ public class QuizViewModel: ObservableObject {
     /// Activates the streak shield, protecting the current streak from one wrong answer
     public func useStreakShield() {
         guard canUseStreakShield() else { return }
-        guard progressManager?.spendCoins(PowerUp.streakShield.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.streakShield) else { return }
 
         usedPowerUps.insert(.streakShield)
-        progressManager?.recordPowerUpUsed(.streakShield)
-        analytics?.logPowerUpUsed(type: .streakShield, coinsSpent: PowerUp.streakShield.cost)
+        recordPowerUpFunding(funding)
         hasActiveStreakShield = true
+    }
+
+    private func recordPowerUpFunding(_ funding: PowerUpSpendResult) {
+        lastPowerUpFunding = funding
+        analytics?.logPowerUpUsed(
+            type: funding.powerUp,
+            fundingSource: funding.fundingSource,
+            coinsSpent: funding.coinsSpent
+        )
     }
 
     public func useExtraLifeWithCoins() -> Bool {

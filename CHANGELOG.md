@@ -5,6 +5,9 @@
 - Add schema-versioned progress and preference persistence with legacy schema-0 decoding.
 - Add injectable persistence stores, atomic replacement, backups, recovery, typed failures, serialized transactions, and read-back verification.
 - Add marker-backed, exactly-once `PlayerProgressImportRequest` transactions.
+- Add persistent per-power-up free credits with credit-before-coin consumption and atomic rollback.
+- Expose power-up funding source and actual coin spend to game consumers and analytics while preserving the existing analytics callback.
+- Support exactly-once legacy inventory targets without converting hint or skip value into coins.
 - Preserve existing URL-based consumers and expose compatibility-path failures through persistence status.
 
 ## v0.1.3

@@ -28,3 +28,5 @@ The default initializer values preserve the production behavior used by existing
 Use `TestScheduler.advance(by:)` or `runNext()` to drive delayed work. Do not add `sleep`, `Task.sleep`, polling, or arbitrary delays to tests.
 
 Persistence tests must cover schema-0 compatibility, schema-1 writes, malformed primary and backup data, backup recovery, interrupted replacement, low storage, read-back mismatch, marker ordering, repeated imports, conflicting imports, and preference reloads. `PlayerProgressImportRequest` is package-generic; legacy source mapping remains app-owned.
+
+Power-up wallet tests must cover independent per-power-up balances, credit-before-coin order, zero-credit fallback, insufficient funding, save/reload, failed-write rollback, and exactly-once imports. Assert both `PowerUpSpendResult.fundingSource` and `coinsSpent`. Legacy hint and skip fixtures must become 50/50 and skip credits without changing coins.

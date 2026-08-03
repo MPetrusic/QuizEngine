@@ -32,6 +32,8 @@ Firebase, Google Mobile Ads, StoreKit, Game Center, MultipeerConnectivity, their
 
 Persistence is owned by `QuizEngineCore`. New writes use a versioned schema-1 envelope, atomic sibling-file replacement, a backup, and read-back verification. Existing unversioned progress and preference plists remain readable as legacy schema 0. Use the throwing store-based APIs when the app must present typed corruption, storage, or recovery failures; the existing URL-based APIs remain source-compatible, with manager failures exposed through persistence status.
 
+`PlayerProgress` also persists free credits independently for every `PowerUp`. `PlayerProgressManager.consumePowerUp(_:)` uses a free credit before the existing coin cost, records usage in the same durable transaction, and returns a `PowerUpSpendResult` for UI and analytics. A failed write rolls back the credit or coin deduction and the usage counters.
+
 ## Required composition
 
 1. Create one validated `QuizVariantDefinition` with your categories, achievements, and explicit `QuestionResource`.
@@ -69,5 +71,6 @@ QuizEngine keeps production defaults for consumers, but its time, calendar, rand
 - `QuizEngineScheduler` controls delayed game and multiplayer work. Tests can manually advance a scheduler instead of sleeping.
 - `PlayerProgressManager` and `UserPreferencesLoader` accept injected persistence stores and temporary persistence URLs for isolated tests.
 - Existing provider protocols accept fake analytics, ads, purchases, haptics, leaderboards, and transports.
+- Power-up tests can grant credits through the manager and assert the returned funding source without app services.
 
 The package's `QuizEngineTestSupport` target is test-only and is not exposed as a library product. It supplies reusable clocks, schedulers, temporary persistence, provider fakes, transport fakes, and fixtures for the package test targets.

@@ -262,6 +262,7 @@ public final class RecordingAnalytics: AnalyticsProvider, @unchecked Sendable {
     public private(set) var gameStarts: [(String?, GameMode)] = []
     public private(set) var gameEnds: [(Int, Int, Int, Int)] = []
     public private(set) var powerUps: [(PowerUp, Int)] = []
+    public private(set) var powerUpFunding: [(PowerUp, PowerUpFundingSource, Int)] = []
     public private(set) var extraLives: [ExtraLifeMethod] = []
     public private(set) var achievements: [(String, Int)] = []
     public private(set) var disconnects: [(Int, String, String)] = []
@@ -278,6 +279,11 @@ public final class RecordingAnalytics: AnalyticsProvider, @unchecked Sendable {
 
     public func logPowerUpUsed(type: PowerUp, coinsSpent: Int) {
         powerUps.append((type, coinsSpent))
+    }
+
+    public func logPowerUpUsed(type: PowerUp, fundingSource: PowerUpFundingSource, coinsSpent: Int) {
+        powerUpFunding.append((type, fundingSource, coinsSpent))
+        logPowerUpUsed(type: type, coinsSpent: coinsSpent)
     }
 
     public func logExtraLifeUsed(method: ExtraLifeMethod) {

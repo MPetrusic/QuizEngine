@@ -364,7 +364,8 @@ public struct PlayerProgressImportRequest: Equatable, Sendable {
         progress: PlayerProgress
     ) throws {
         guard !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !sourceFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              !sourceFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              progress.powerUpCredits.values.allSatisfy({ $0 >= 0 }) else {
             throw PersistenceError.invalidImportRequest
         }
         self.identifier = identifier

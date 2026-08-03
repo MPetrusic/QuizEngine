@@ -7,6 +7,7 @@
 - category IDs;
 - achievement IDs;
 - question integer IDs and their meaning;
+- `PowerUp` raw identifiers used by persisted credit balances;
 - purchase-status keys owned by the app.
 
 Renaming an ID, deleting a category that appears in saved progress, or reusing a question ID for different content requires an explicit migration. Do not ship such a change as a normal content edit.
@@ -29,7 +30,9 @@ If the primary is missing, the manager starts with fresh state and leaves any st
 
 ## Import transaction
 
-The app maps its legacy sources into a complete `PlayerProgress` value and submits a `PlayerProgressImportRequest` with a stable identifier and source fingerprint. QuizEngine writes a pending marker before replacing progress, verifies the replacement, and writes a completed marker last. A matching completed request returns `.alreadyImported` only when the destination remains a valid persistence document; a destination that matches the pre-import snapshot is treated as an incomplete transaction. A different fingerprint for the same identifier fails as a conflict. A pending marker found on the next launch restores the prior backup only when it matches the marker's recorded previous progress (or removes a newly created primary), clears the marker, and leaves the import retryable. Legacy source files are never deleted by the package.
+The app maps its legacy sources into a complete `PlayerProgress` value and submits a `PlayerProgressImportRequest` with a stable identifier and source fingerprint. QuizEngine writes a pending marker before replacing progress, verifies the replacement, and writes a completed marker last. A matching completed request returns `.alreadyImported` only when the submitted target also matches the completed transaction and the destination remains a valid persistence document; a different fingerprint or target fails as a conflict. A destination that matches the pre-import snapshot is treated as an incomplete transaction. A pending marker found on the next launch restores the prior backup only when it matches the marker's recorded previous progress (or removes a newly created primary), clears the marker, and leaves the import retryable. Legacy source files are never deleted by the package.
+
+Power-up inventory is part of that complete target. Map each legacy hint to one `.fiftyFifty` credit and each legacy skip to one `.skipQuestion` credit. Preserve any other existing engine credit balances according to the app's conflict plan. Credit counts must be nonnegative, and inventory value must never be converted into coins.
 
 ## From StarterQuiz to your app
 
