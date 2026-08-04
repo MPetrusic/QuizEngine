@@ -64,6 +64,201 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    private var contentCategories: [QuizCategoryDefinition] {
+        [
+            .init(id: "space", displayNameKey: "category.space", iconName: "moon", displayOrder: 0, unlockRequirement: .free),
+            .init(id: "nature", displayNameKey: "category.nature", iconName: "leaf", displayOrder: 1, unlockRequirement: .free)
+        ]
+    }
+
+    private func validQuestion(
+        id: Int = 1,
+        categories: [String] = ["space"],
+        answers: [Answer]? = nil,
+        difficulty: Int = 1
+    ) -> Question {
+        Question(
+            id: id,
+            question: "Question \(id)",
+            answers: answers ?? [
+                .init(text: "Mercury", correct: true),
+                .init(text: "Venus", correct: false),
+                .init(text: "Earth", correct: false),
+                .init(text: "Mars", correct: false)
+            ],
+            categories: categories,
+            difficulty: difficulty
+        )
+    }
+
+    func testContentValidationRejectsNonPositiveAndDuplicateQuestionIDs() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 0),
+                validQuestion(id: 0),
+                validQuestion(id: 8),
+                validQuestion(id: 8)
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [
+                .nonPositiveQuestionID(questionIndex: 0, id: 0),
+                .nonPositiveQuestionID(questionIndex: 1, id: 0),
+                .duplicateQuestionID(questionIndex: 1, id: 0),
+                .duplicateQuestionID(questionIndex: 3, id: 8)
+            ]
+        )
+    }
+
+    func testContentValidationDoesNotImposeAnAppSpecificContentCount() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: []),
+            categories: contentCategories
+        )
+
+        XCTAssertTrue(result.isValid)
+        XCTAssertEqual(result.issues, [])
+    }
+
+    func testContentValidationRejectsMissingAndUnknownCategories() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 1, categories: []),
+                validQuestion(id: 2, categories: ["space", "SPACE", "unknown"])
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [
+                .missingCategories(questionIndex: 0),
+                .unknownCategory(questionIndex: 1, categoryID: "SPACE"),
+                .unknownCategory(questionIndex: 1, categoryID: "unknown")
+            ]
+        )
+    }
+
+    func testContentValidationRejectsAnswerCountBlankAndNormalizedDuplicateAnswers() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 1, answers: [
+                    .init(text: "Correct", correct: true),
+                    .init(text: "Other", correct: false),
+                    .init(text: "Third", correct: false)
+                ]),
+                validQuestion(id: 2, answers: [
+                    .init(text: "Correct", correct: true),
+                    .init(text: "  \n", correct: false),
+                    .init(text: "Other", correct: false),
+                    .init(text: "Third", correct: false)
+                ]),
+                validQuestion(id: 3, answers: [
+                    .init(text: "New York", correct: true),
+                    .init(text: "  new\t york ", correct: false),
+                    .init(text: "Other", correct: false),
+                    .init(text: "Third", correct: false)
+                ])
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [
+                .invalidAnswerCount(questionIndex: 0, count: 3),
+                .emptyAnswerText(questionIndex: 1, answerIndex: 1, text: "  \n"),
+                .duplicateAnswerText(questionIndex: 2, answerIndex: 1, text: "  new\t york ")
+            ]
+        )
+    }
+
+    func testContentValidationRejectsInvalidCorrectAnswerCountsAndDifficultyBounds() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(
+                    id: 1,
+                    answers: [
+                        .init(text: "A", correct: false),
+                        .init(text: "B", correct: false),
+                        .init(text: "C", correct: false),
+                        .init(text: "D", correct: false)
+                    ],
+                    difficulty: 0
+                ),
+                validQuestion(
+                    id: 2,
+                    answers: [
+                        .init(text: "A", correct: true),
+                        .init(text: "B", correct: true),
+                        .init(text: "C", correct: false),
+                        .init(text: "D", correct: false)
+                    ],
+                    difficulty: 4
+                )
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [
+                .invalidCorrectAnswerCount(questionIndex: 0, count: 0),
+                .invalidDifficulty(questionIndex: 0, difficulty: 0),
+                .invalidCorrectAnswerCount(questionIndex: 1, count: 2),
+                .invalidDifficulty(questionIndex: 1, difficulty: 4)
+            ]
+        )
+    }
+
+    func testContentValidationAcceptsValidContentAtDifficultyBounds() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 1, categories: ["space", "nature"], difficulty: 1),
+                validQuestion(id: 2, categories: ["nature"], difficulty: 3)
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertTrue(result.isValid)
+        XCTAssertEqual(result.issues, [])
+    }
+
+    func testContentValidationReportsAggregateIssuesInDeterministicOrder() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(
+                    id: -1,
+                    categories: ["unknown"],
+                    answers: [
+                        .init(text: "Same", correct: true),
+                        .init(text: "same", correct: false),
+                        .init(text: "", correct: false)
+                    ],
+                    difficulty: 9
+                ),
+                validQuestion(id: 3, categories: [])
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [
+                .nonPositiveQuestionID(questionIndex: 0, id: -1),
+                .unknownCategory(questionIndex: 0, categoryID: "unknown"),
+                .invalidAnswerCount(questionIndex: 0, count: 3),
+                .duplicateAnswerText(questionIndex: 0, answerIndex: 1, text: "same"),
+                .emptyAnswerText(questionIndex: 0, answerIndex: 2, text: ""),
+                .invalidDifficulty(questionIndex: 0, difficulty: 9),
+                .missingCategories(questionIndex: 1)
+            ]
+        )
+    }
+
     func testExplicitQuestionResourceLoadsAlternateFile() throws {
         let data = try service.getQuestionData()
         XCTAssertEqual(data.questions.count, 3)

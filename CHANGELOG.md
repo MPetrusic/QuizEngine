@@ -2,6 +2,7 @@
 
 ## v0.2.0
 
+- Add the opt-in `QuizContentValidator` aggregate API with immutable `Sendable` results/issues for positive unique IDs, canonical categories, four non-empty normalized-distinct answers, exactly one correct answer, and difficulty `1...3`. It preserves existing loading behavior and leaves app asset/editorial checks outside the package.
 - Harden multiplayer with an app-supplied protocol/content/capability handshake, host-created match IDs, bounded raw-payload decoding, sender/phase/round validation, replay/duplicate suppression, and deterministic terminal failures.
 - Add additive raw-payload transport members while retaining legacy typed-message transport APIs as source-compatible bridges; hardened matches reject transports that do not implement the raw path.
 - Remove hardcoded multiplayer analytics transport labels. Hardened callers supply the label in `MultiplayerMatchConfiguration`.

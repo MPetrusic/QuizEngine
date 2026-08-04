@@ -38,6 +38,8 @@ let progress = PlayerProgressManager(
 )
 ```
 
+Use `QuizContentValidator.validate(_:categories:)` in consumer CI on the decoded question data and `variant.categories`. It is a pure, immutable Core contract for structural content only; app-owned image/asset-catalog and editorial validation stay outside the package. Validate before a migration or content cutover, but keep the existing loader behavior unchanged for source compatibility.
+
 Existing URL-based initializers remain compatible. Apps that need typed load and write failures should inject a `QuizEnginePersistenceStore` through the throwing initializer and handle `PersistenceError` explicitly. A public `PlayerProgressImportRequest` provides an exactly-once, marker-backed import transaction for app-owned legacy migration planners.
 
 Power-up credits live in `PlayerProgress`, keyed by `PowerUp`; they are not app preferences or coin equivalents. Apps query balances and affordability through `PlayerProgressManager`, then call `consumePowerUp(_:)`. That operation spends one free credit before coins and atomically persists the funding deduction with power-up usage. `PowerUpSpendResult` exposes `.freeCredit` or `.coins` plus the actual coin amount to the game layer.

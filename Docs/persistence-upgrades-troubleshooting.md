@@ -12,6 +12,8 @@
 
 Renaming an ID, deleting a category that appears in saved progress, or reusing a question ID for different content requires an explicit migration. Do not ship such a change as a normal content edit.
 
+Before a cutover or content update, decode the proposed question data and run `QuizContentValidator.validate(_:categories:)` with the final variant categories. It catches package-owned structural defects without inspecting app resources. Asset-catalog existence, editorial approval, sources, and distribution gates remain consumer responsibilities.
+
 QuizEngine has no automated historical installed-user save fixture yet. A consumer app must add one before changing its own persistence contract.
 
 For a genuinely fresh player with no primary progress document, `PlayerProgressManager` uses `variant.rules.economy.initialCoins`. Legacy/schema documents whose older payload omits `coins` or `totalCoinsEarned` continue to decode those fields as 100. Changing a variant's fresh balance never rewrites or reinterprets an existing player's stored balance.

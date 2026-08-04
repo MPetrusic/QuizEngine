@@ -15,6 +15,8 @@ Use the additive dependency parameters on the Core, Game, and Multiplayer initia
 
 The default initializer values preserve the production behavior used by existing consumers.
 
+Content-validation tests construct `QuestionData` directly and assert the complete ordered `QuizContentValidationIssue` list. Cover every structural rule and a valid multi-category fixture without relying on a bundle, asset catalog, wall time, or global state. Consumer CI must add its own asset and editorial tests after calling the package validator.
+
 ## Test-only support target
 
 `QuizEngineTestSupport` is a non-product SwiftPM target used by the package's Core, Game, and Multiplayer tests. It contains:

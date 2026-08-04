@@ -21,10 +21,12 @@
 }
 ```
 
-Required for new content: top-level `questions`, and for every question a stable positive integer `id`, `question`, `answers`, and `categories`. Each category string must be a declared variant category. Supply at least one correct answer. `difficulty`, `imageName`, and `description` are optional.
+Required for new content: top-level `questions`, and for every question a stable positive integer `id`, `question`, `answers`, and `categories`. Each category string must exactly match a declared variant category. Supply exactly four non-empty answers with exactly one correct answer, and set `difficulty` to `1...3`. `imageName` and `description` are optional.
+
+Use `QuizContentValidator.validate(_:categories:)` in consumer CI after decoding content. It reports all structural failures in stable input order. Answer uniqueness ignores repeated whitespace and case, so values such as `"New York"` and `"  new\\t york "` are duplicates. The validator intentionally does not inspect question text, image names, asset catalogs, or editorial metadata.
 
 The decoder accepts legacy singular `category` and absent IDs for old data. Do not use either in a new app: absent IDs decode as `0`, which destroys progress and seen-question tracking when repeated.
 
 Question IDs are persisted in seen/correct-answer sets. Never rename or reuse an ID for a different question after release. Adding new IDs is safe. Changing a question's category changes progress semantics and should be treated as a content migration.
 
-Images named by `imageName` are app resources. Verify they are included in the same app target/bundle as the question JSON.
+Images named by `imageName` are app resources. Verify that any non-empty image name exists with correct case in the same app target/bundle as the question JSON; this is outside QuizEngine because the package cannot inspect an app asset catalog.

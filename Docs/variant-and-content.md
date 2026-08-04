@@ -48,6 +48,20 @@ See [Rules and economy configuration](rules-and-economy.md) for the complete inv
 
 `id` values must be lowercase, non-empty, unique, and permanent after release. Category display orders must be unique. The package sorts categories by display order.
 
+## Consumer content gate
+
+After decoding the configured question resource, run the package validator against the same categories used to construct the variant:
+
+```swift
+let content = try questions.getQuestionData()
+let validation = QuizContentValidator.validate(content, categories: variant.categories)
+precondition(validation.isValid, "Invalid quiz content: \(validation.issues)")
+```
+
+`QuizContentValidator` checks structural rules only: positive unique question IDs, declared categories, exactly four non-empty distinct answers, exactly one correct answer, and difficulty `1...3`. It does not load resources, mutate the question service, inspect app assets, or validate editorial policy. Keep asset-catalog, source, approval, and distribution checks in consumer CI.
+
+Question IDs are migration identifiers after release. Run the content gate before a cutover or content update, and never renumber or reuse a released ID. Use the app-owned migration plan and `PlayerProgressImportRequest` for any persistence transition.
+
 ## Category unlock rules
 
 - `.free`

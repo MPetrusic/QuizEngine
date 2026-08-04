@@ -26,7 +26,7 @@ Open [StarterQuiz](Examples/StarterQuiz/README.md) for a minimal runnable iOS ap
 
 | QuizEngine owns | Your app owns |
 | --- | --- |
-| quiz rules, scoring, game state, progress, unlock evaluation, achievement evaluation, persistence format | questions, localizations, views, theme, images, icons, analytics, ads, purchases, leaderboards, entitlements, SDK setup, multiplayer transports |
+| quiz rules, scoring, game state, progress, unlock evaluation, achievement evaluation, persistence format, structural question validation | questions, localizations, views, theme, images, icons, asset-catalog checks, editorial checks, analytics, ads, purchases, leaderboards, entitlements, SDK setup, multiplayer transports |
 
 Firebase, Google Mobile Ads, StoreKit, Game Center, MultipeerConnectivity, their IDs, and their capabilities do not belong in this package.
 
@@ -43,6 +43,18 @@ Reusable gameplay and economy policy is owned by the variant through a validated
 3. Pass that same service and variant to `PlayerProgressManager`; build game sessions from the same service.
 4. Keep category IDs, achievement IDs, and question IDs stable after release.
 5. Add app-owned adapters only for integrations your app actually uses.
+
+## Content validation
+
+Validate decoded content in consumer CI before building a session or shipping a content update. The validator is pure and reports every structural issue in deterministic order; it does not inspect bundles, images, or editorial metadata.
+
+```swift
+let content = try QuestionDataService(variant: variant).getQuestionData()
+let validation = QuizContentValidator.validate(content, categories: variant.categories)
+precondition(validation.isValid, "Invalid quiz content: \(validation.issues)")
+```
+
+The package validates positive unique IDs, declared categories, four non-empty distinct answers, one correct answer, and difficulty `1...3`. Consumers must separately validate image names against their asset catalog, editorial approval, sources, content distribution, and any app-specific metadata. Once released, question IDs are persistent migration identifiers: never renumber or reuse them for different content.
 
 ## Guides
 
