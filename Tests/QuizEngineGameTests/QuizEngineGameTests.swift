@@ -54,12 +54,19 @@ final class QuizEngineGameTests: XCTestCase {
     }
 
     func testScoringAwardsTenPointsThenTwentyAfterFiveAnswerStreak() {
-        let viewModel = QuizViewModel(questions: questions, gameMode: .singlePlayer, selectedCategory: nil)
+        let scheduler = TestScheduler()
+        let viewModel = QuizViewModel(
+            questions: Array(repeating: questions[0], count: 6),
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: scheduler
+        )
         viewModel.stopTimer()
 
         for _ in 0..<6 {
             viewModel.increaseScoreForCorrectAnswer()
             viewModel.stopTimer()
+            scheduler.advance(by: 1)
         }
 
         XCTAssertEqual(viewModel.score, 70)
@@ -493,6 +500,7 @@ final class QuizEngineGameTests: XCTestCase {
     }
 
     func testCustomRulesDriveSoloInitializationScoringCoinsAndRestart() throws {
+        let scheduler = TestScheduler()
         let rules = try makeRules(
             economy: QuizEconomyRules(
                 initialCoins: 100,
@@ -508,11 +516,11 @@ final class QuizEngineGameTests: XCTestCase {
         )
         let manager = try makeProgressManager(store: FakePersistenceStore(), rules: rules)
         let viewModel = QuizViewModel(
-            questions: questions,
+            questions: Array(repeating: questions[0], count: 3),
             gameMode: .singlePlayer,
             selectedCategory: nil,
             rules: rules,
-            scheduler: TestScheduler(),
+            scheduler: scheduler,
             randomNumberGenerator: SeededRandomNumberGenerator(seed: 80)
         )
         viewModel.progressManager = manager
@@ -520,9 +528,11 @@ final class QuizEngineGameTests: XCTestCase {
 
         XCTAssertEqual(viewModel.livesRemaining, 4)
         XCTAssertEqual(viewModel.timeRemaining, 22)
-        viewModel.increaseScoreForCorrectAnswer()
-        viewModel.increaseScoreForCorrectAnswer()
-        viewModel.increaseScoreForCorrectAnswer()
+        for _ in 0..<3 {
+            viewModel.increaseScoreForCorrectAnswer()
+            viewModel.stopTimer()
+            scheduler.advance(by: 1)
+        }
         XCTAssertEqual(viewModel.score, 33)
         XCTAssertEqual(viewModel.coinsEarnedThisSession, 9)
         XCTAssertEqual(manager.coins, 109)
@@ -761,6 +771,216 @@ final class QuizEngineGameTests: XCTestCase {
         XCTAssertEqual(analytics.events.count, 2)
         XCTAssertEqual(analytics.events[1].0, .fiftyFifty)
         XCTAssertEqual(analytics.events[1].1, 0)
+    }
+
+    func testRapidAnswerTapsLockRulesBeforePresentationFlags() {
+        let scheduler = TestScheduler()
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: scheduler
+        )
+        viewModel.stopTimer()
+
+        // A legacy view is still allowed to write this compatibility flag. It
+        // cannot bypass the state reducer or duplicate the answer reward.
+        viewModel.shouldAllowTap = false
+        viewModel.increaseScoreForCorrectAnswer()
+        viewModel.reduceLivesRemaining()
+
+        XCTAssertEqual(viewModel.score, 10)
+        XCTAssertEqual(viewModel.livesRemaining, 3)
+        XCTAssertEqual(viewModel.sessionState.phase, .feedback(.correct))
+        XCTAssertFalse(viewModel.sessionState.acceptsAnswerInput)
+        XCTAssertEqual(
+            viewModel.consumeSessionEffects().filter {
+                if case .answerLocked = $0 { return true }
+                return false
+            }.count,
+            1
+        )
+    }
+
+    func testTapAtDeadlineLosesToDeterministicTimeout() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible.solo
+        let rules = try makeRules(
+            solo: QuizSoloRules(
+                timerDurationSeconds: 1,
+                startingLives: defaults.startingLives,
+                scoring: defaults.scoring
+            )
+        )
+        let clock = TestClock(now: Date(timeIntervalSinceReferenceDate: 10))
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            rules: rules,
+            clock: clock,
+            scheduler: TestScheduler()
+        )
+
+        clock.advance(by: 1)
+        viewModel.increaseScoreForCorrectAnswer()
+
+        XCTAssertEqual(viewModel.score, 0)
+        XCTAssertEqual(viewModel.livesRemaining, 2)
+        XCTAssertEqual(viewModel.sessionState.phase, .feedback(.timedOut))
+    }
+
+    func testSkipLocksOutConflictingPowerUpsAndDelayedWork() throws {
+        let question = Question(
+            id: 10,
+            question: "Four",
+            answers: [
+                Answer(text: "Correct", correct: true),
+                Answer(text: "Wrong 1", correct: false),
+                Answer(text: "Wrong 2", correct: false),
+                Answer(text: "Wrong 3", correct: false)
+            ],
+            categories: ["alpha"]
+        )
+        let manager = try makeProgressManager(store: FakePersistenceStore())
+        XCTAssertTrue(manager.grantPowerUpCredits(1, for: .skipQuestion))
+        XCTAssertTrue(manager.grantPowerUpCredits(1, for: .fiftyFifty))
+        let scheduler = TestScheduler()
+        let viewModel = QuizViewModel(
+            questions: [question, question],
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: scheduler,
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 42)
+        )
+        viewModel.progressManager = manager
+        viewModel.stopTimer()
+
+        viewModel.useSkipQuestion()
+        viewModel.useFiftyFifty()
+        scheduler.advance(by: 0.3)
+
+        XCTAssertEqual(manager.powerUpCredits(for: .skipQuestion), 0)
+        XCTAssertEqual(manager.powerUpCredits(for: .fiftyFifty), 1)
+        XCTAssertTrue(viewModel.hiddenAnswerIndices.isEmpty)
+        XCTAssertEqual(viewModel.questionNumber, 1)
+    }
+
+    func testExitAndRepeatedTerminalCallbacksAreIdempotent() {
+        let analytics = RecordingAnalytics()
+        let scheduler = CancellationIgnoringTestScheduler()
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            analytics: analytics,
+            scheduler: scheduler
+        )
+
+        viewModel.increaseScoreForCorrectAnswer()
+        viewModel.exitGame()
+        viewModel.exitGame()
+        viewModel.endGame()
+        scheduler.runPendingBatch()
+
+        XCTAssertEqual(viewModel.sessionState.phase, .terminal(.exited))
+        XCTAssertEqual(viewModel.questionNumber, 0)
+        XCTAssertTrue(analytics.gameEnds.isEmpty)
+        XCTAssertFalse(viewModel.shouldPresentResultView)
+    }
+
+    func testRestartDiscardsUndeliveredEffectsFromThePriorGeneration() {
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: TestScheduler()
+        )
+        viewModel.stopTimer()
+        viewModel.increaseScoreForCorrectAnswer()
+        viewModel.restartGame()
+
+        let effects = viewModel.consumeSessionEffects()
+        XCTAssertFalse(effects.contains {
+            if case .answerLocked = $0 { return true }
+            return false
+        })
+        XCTAssertTrue(effects.contains {
+            if case .pendingWorkCancelled = $0 { return true }
+            return false
+        })
+        XCTAssertEqual(viewModel.sessionState.phase, .answering)
+    }
+
+    func testTerminalSessionCannotAdvanceOrRecordAnotherSeenQuestion() throws {
+        let manager = try makeProgressManager(store: FakePersistenceStore())
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: TestScheduler()
+        )
+        viewModel.progressManager = manager
+        viewModel.exitGame()
+        viewModel.goToNextQuestion()
+
+        XCTAssertEqual(viewModel.questionNumber, 0)
+        XCTAssertEqual(viewModel.sessionState.phase, .terminal(.exited))
+        XCTAssertFalse(manager.progress.seenQuestionIDs.contains(questions[1].id))
+    }
+
+    func testRestartingEmptySessionKeepsTerminalPresentationAndDoesNotStartTimer() {
+        let scheduler = TestScheduler()
+        let viewModel = QuizViewModel(
+            questions: [],
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            scheduler: scheduler
+        )
+
+        viewModel.restartGame()
+
+        XCTAssertEqual(viewModel.sessionState.phase, .terminal(.emptySession))
+        XCTAssertTrue(viewModel.shouldPresentResultView)
+        XCTAssertEqual(scheduler.pendingTaskCount, 0)
+    }
+
+    func testCompletedTerminalProcessingAndRewardedAdRequestsAreExactlyOnce() throws {
+        let analytics = RecordingAnalytics()
+        let rewardAd = FakeRewardAdProvider(isLoaded: true)
+        let manager = try makeProgressManager(store: FakePersistenceStore())
+        let viewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            analytics: analytics,
+            rewardAd: rewardAd,
+            scheduler: TestScheduler()
+        )
+        viewModel.progressManager = manager
+        viewModel.stopTimer()
+
+        viewModel.endGame()
+        viewModel.endGame()
+        XCTAssertEqual(analytics.gameEnds.count, 1)
+        XCTAssertEqual(manager.lifetimeGamesPlayed, 1)
+
+        let adAnalytics = RecordingAnalytics()
+        let adViewModel = QuizViewModel(
+            questions: questions,
+            gameMode: .singlePlayer,
+            selectedCategory: nil,
+            analytics: adAnalytics,
+            rewardAd: rewardAd,
+            scheduler: TestScheduler()
+        )
+        adViewModel.stopTimer()
+        adViewModel.showRewardAd()
+        adViewModel.showRewardAd()
+        XCTAssertEqual(rewardAd.showCount, 1)
+        rewardAd.completeReward(earned: true)
+        rewardAd.repeatLastCompletion(earned: true)
+        XCTAssertEqual(adViewModel.livesRemaining, 4)
+        XCTAssertEqual(adAnalytics.extraLives, [.ad])
     }
 
     private func makeProgressManager(

@@ -42,3 +42,5 @@ Existing variant, service, game, and multiplayer initializers use `.serbianCompa
 Explicit legacy session-size/count overloads continue to honor their arguments. The exact no-count overloads on a variant-created `QuestionDataService` use configured session values.
 
 Transport retries, disconnect/pause timeouts, delayed UI presentation, clocks, random generators, schedulers, and multiplayer protocol negotiation are not product-balance rules. QE-4 routes rule time, selection, answer order, timers, restart, and lifecycle pause/resume through injected dependencies. Delayed presentation-state extraction remains QE-5, and multiplayer negotiation/payload hardening remains QE-6.
+
+QE-5 exposes solo session phases/effects separately from SwiftUI presentation. The delay values remain compatibility behavior inside `QuizViewModel`; applications animate an emitted effect rather than implementing answer, timeout, skip, restart, exit, or terminal rules themselves. Multiplayer wire protocol hardening remains QE-6.

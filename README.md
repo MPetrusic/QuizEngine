@@ -79,3 +79,7 @@ QuizEngine keeps production defaults for consumers, but its time, calendar, rand
 - Power-up tests can grant credits through the manager and assert the returned funding source without app services.
 
 The package's `QuizEngineTestSupport` target is test-only and is not exposed as a library product. It supplies reusable clocks, schedulers, temporary persistence, provider fakes, transport fakes, and fixtures for the package test targets.
+
+## Solo session state and effects
+
+`QuizViewModel` remains `@MainActor` and keeps its established published flags and methods for existing SwiftUI consumers. New consumers can instead observe its immutable `sessionState` and drain `consumeSessionEffects()`. `SoloQuizSessionState` models answering, answer feedback, description, extra-life, transition, and terminal phases; `SoloQuizSessionEffect` expresses presentation work as `Sendable` values. These values cannot unlock an answer or re-run a terminal transition. `exitGame()` is terminal without awarding a completed-session result; repeated terminal, delayed, or rewarded-ad callbacks are ignored.

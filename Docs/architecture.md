@@ -56,6 +56,8 @@ Inject one clock/calendar pair anywhere local dates or elapsed time affect rules
 
 Clock rollback is conservative: elapsed values never become negative or increase a remaining timer, and future streak/reward timestamps cannot grant another reward or rewrite streak state. An injected `Calendar` and its time zone define local-day and DST boundaries.
 
+Single-player rule flow is an explicit state/effect reducer. `SoloQuizSessionState` and `SoloQuizSessionEffect` are immutable, `Sendable` values; the `@MainActor` view model publishes them while preserving the established flags and methods as compatibility projections. The reducer locks answers before feedback, rejects races and stale scheduled work by state/generation, and makes completed/exited terminal paths once-only. SwiftUI owns animations and sheets after observing an effect; it does not decide rule validity.
+
 ## Serbian Quiz is a reference, not a template
 
 `SerbianQuizVariantDefinition` shows the correct composition pattern. Its categories, achievement IDs, question resource, views, theme, Firebase/ads/StoreKit/Game Center adapters, and multiplayer transports are Serbian Quiz implementation details. New apps define all of those independently.

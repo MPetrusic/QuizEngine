@@ -2,6 +2,10 @@
 
 ## v0.2.0
 
+- Extract immutable, `Sendable` single-player session states and effects from SwiftUI presentation flags.
+- Make answer locks, timeout/tap races, skip transitions, power-up conflicts, restart, exit, delayed callbacks, rewarded-ad requests, and completed terminal processing deterministic and idempotent.
+- Keep `QuizViewModel` and existing SwiftUI-facing flags/methods `@MainActor` as additive compatibility bridges; add `sessionState`, `sessionEffects`, `consumeSessionEffects()`, and `exitGame()` for new hosts.
+- Add deterministic QE-5 tests for rapid taps, deadline races, stale/exit callbacks, repeated terminal/reward requests, and conflicting power-ups.
 - Complete deterministic clock, calendar/time-zone, RNG, selection, and scheduler injection across reusable rule boundaries.
 - Make solo timer ticks scheduler-owned while preserving the public timer compatibility bridge and existing initializer defaults.
 - Add solo lifecycle pause/resume for question and freeze timing; harden multiplayer pause/resume and timeout accounting.

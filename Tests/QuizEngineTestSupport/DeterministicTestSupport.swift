@@ -380,6 +380,7 @@ public final class FakeRewardAdProvider: RewardAdProvider {
     public private(set) var showCount = 0
     public var isLoaded: Bool
     private var completion: (@MainActor (Bool) -> Void)?
+    private var lastCompletion: (@MainActor (Bool) -> Void)?
 
     public init(isLoaded: Bool = false) {
         self.isLoaded = isLoaded
@@ -392,11 +393,17 @@ public final class FakeRewardAdProvider: RewardAdProvider {
     public func show(completion: @escaping @MainActor (Bool) -> Void) {
         showCount += 1
         self.completion = completion
+        lastCompletion = completion
     }
 
     public func completeReward(earned: Bool) {
         completion?(earned)
         completion = nil
+    }
+
+    /// Simulates a broken SDK adapter invoking an already-delivered callback.
+    public func repeatLastCompletion(earned: Bool) {
+        lastCompletion?(earned)
     }
 }
 

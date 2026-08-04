@@ -29,6 +29,8 @@ Use `TestScheduler.advance(by:)` or `runNext()` to drive delayed work. Do not ad
 
 Determinism coverage must compare independent instances with identical input, clock/calendar, seed, and call sequence. Cover competitive/category/practice/multiplayer selection, answer ordering, 50/50 removal, ad decisions, restart, scoring, and rewards. Time coverage must include backward clock movement, spring/fall DST, explicit time-zone calendars, exact timeout/freeze boundaries, rapid timeout/tap attempts, lifecycle pause/resume, and stale-task cancellation after restart.
 
+For solo sessions, assert `SoloQuizSessionState` and `SoloQuizSessionEffect` directly rather than relying on SwiftUI animations or writable legacy flags. Cover rapid answer taps, a tap at the logical deadline, repeated terminal and rewarded-ad callbacks, restart/exit with cancellation-ignoring schedulers, stale effects, power-up conflicts, and exactly-once progress/analytics/leaderboard processing.
+
 `TestClock` is lock-backed and can move forward or backward with `advance(by:)`, or jump to an exact instant with `setNow(_:)`. No test should depend on the host's current calendar, time zone, random generator, Documents directory, or wall-clock waiting.
 
 Persistence tests must cover schema-0 compatibility, schema-1 writes, malformed primary and backup data, backup recovery, interrupted replacement, low storage, read-back mismatch, marker ordering, repeated imports, conflicting imports, and preference reloads. `PlayerProgressImportRequest` is package-generic; legacy source mapping remains app-owned.
