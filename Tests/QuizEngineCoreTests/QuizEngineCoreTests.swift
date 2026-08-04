@@ -487,6 +487,54 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertNil(manager.progress.lastDailyRewardClaimedDate)
     }
 
+    func testMultiplayerReceiptRecordsRewardsExactlyOnceAndSurvivesReload() throws {
+        let variant = try makeAlternateVariant()
+        let store = FakePersistenceStore()
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: store
+        )
+
+        let first = manager.recordMultiplayerResult(
+            matchID: "match-1", fingerprint: "result-a", won: true, draw: false,
+            score: 10, questionsCompleted: 2, questionsCorrect: 2,
+            coinsEarned: 5, responseTimes: [100, 200]
+        )
+        XCTAssertEqual(first, .recorded)
+        XCTAssertEqual(manager.recordMultiplayerResult(
+            matchID: "match-1", fingerprint: "result-a", won: true, draw: false,
+            score: 10, questionsCompleted: 2, questionsCorrect: 2,
+            coinsEarned: 5, responseTimes: [100, 200]
+        ), .alreadyRecorded)
+        XCTAssertEqual(manager.recordMultiplayerResult(
+            matchID: "match-1", fingerprint: "tampered", won: false, draw: false,
+            score: 0, questionsCompleted: 0, questionsCorrect: 0,
+            coinsEarned: 0, responseTimes: []
+        ), .conflictingReceipt)
+        XCTAssertEqual(manager.progress.multiplayerGamesPlayed, 1)
+        XCTAssertEqual(manager.progress.coins, 105)
+
+        let reloaded = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: store
+        )
+        XCTAssertEqual(reloaded.recordMultiplayerResult(
+            matchID: "match-1", fingerprint: "result-a", won: true, draw: false,
+            score: 10, questionsCompleted: 2, questionsCorrect: 2,
+            coinsEarned: 5, responseTimes: [100, 200]
+        ), .alreadyRecorded)
+        XCTAssertEqual(reloaded.progress.multiplayerGamesPlayed, 1)
+
+        XCTAssertEqual(reloaded.recordMultiplayerResult(
+            matchID: "match-negative", fingerprint: "loss", won: false, draw: false,
+            score: -5, questionsCompleted: 1, questionsCorrect: 0,
+            coinsEarned: 0, responseTimes: [100]
+        ), .recorded)
+        XCTAssertEqual(reloaded.progress.multiplayerGamesLost, 1)
+    }
+
     func testEveryAchievementRuleUnlocksAtExactAndAboveThresholdAndReportsProgress() throws {
         let variant = try makeAlternateVariant()
         let achievementService = AchievementService(variant: variant)

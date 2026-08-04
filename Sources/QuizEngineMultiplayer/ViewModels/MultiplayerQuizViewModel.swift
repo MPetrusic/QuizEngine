@@ -125,6 +125,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private let analytics: (any AnalyticsProvider)?
     private let interstitialAd: (any InterstitialAdProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
+    private let progressManager: PlayerProgressManager?
 
     private var timerTask: (any QuizEngineScheduledTask)?
     private var timerGeneration: UInt = 0
@@ -146,6 +147,8 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private var guestAnswerTime: Date?
     private var hostAnswer: AnswerPayload?
     private var guestAnswer: AnswerPayload?
+    private var pendingHostSetup: (questions: [Question], localDisplayName: String)?
+    private var terminalEffectsRecorded = false
 
     // MARK: - Init
 
@@ -154,6 +157,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         analytics: (any AnalyticsProvider)? = nil,
         interstitialAd: (any InterstitialAdProvider)? = nil,
         purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        progressManager: PlayerProgressManager? = nil,
         clock: any QuizEngineClock = SystemQuizEngineClock(),
         scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
         randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
@@ -164,6 +168,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
             analytics: analytics,
             interstitialAd: interstitialAd,
             purchaseStatus: purchaseStatus,
+            progressManager: progressManager,
             clock: clock,
             scheduler: scheduler,
             randomNumberGenerator: randomNumberGenerator
@@ -176,6 +181,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         analytics: (any AnalyticsProvider)? = nil,
         interstitialAd: (any InterstitialAdProvider)? = nil,
         purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        progressManager: PlayerProgressManager? = nil,
         clock: any QuizEngineClock = SystemQuizEngineClock(),
         scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
         randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
@@ -185,6 +191,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         self.analytics = analytics
         self.interstitialAd = interstitialAd
         self.purchaseStatus = purchaseStatus
+        self.progressManager = progressManager
         self.clock = clock
         self.scheduler = scheduler
         self.randomNumberGenerator = randomNumberGenerator
@@ -200,6 +207,15 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     // MARK: - Game Setup
 
     public func setupAsHost(questions: [Question], localDisplayName: String) {
+        if gameCoordinator.isHardenedMatch, !gameCoordinator.handshakeAccepted {
+            pendingHostSetup = (questions, localDisplayName)
+            return
+        }
+        completeHostSetup(questions: questions, localDisplayName: localDisplayName)
+    }
+
+    private func completeHostSetup(questions: [Question], localDisplayName: String) {
+        guard !questions.isEmpty else { return }
         self.questions = questions
         self.myDisplayName = localDisplayName
         self.seed = UInt64.random(in: 1...UInt64.max, using: &randomNumberGenerator)
@@ -218,7 +234,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         let retryDelayMs = 500
 
         print("[MultiplayerQuizViewModel] Host sending gameConfig with \(config.questions.count) questions")
-        try? gameCoordinator.transport?.send(message: .gameConfig(config))
+        gameCoordinator.sendGameConfig(config)
 
         gameConfigRetryTask?.cancel()
         scheduleGameConfigRetry(config, attempt: 1, maxRetries: maxRetries, retryDelayMs: retryDelayMs)
@@ -236,7 +252,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         ) { [weak self] in
             guard let self, !self.isGameOver, !self.gameCoordinator.opponentReady else { return }
             print("[MultiplayerQuizViewModel] Host re-sending gameConfig (retry \(attempt)/\(maxRetries))")
-            try? self.gameCoordinator.transport?.send(message: .gameConfig(config))
+            self.gameCoordinator.sendGameConfig(config)
             self.scheduleGameConfigRetry(
                 config,
                 attempt: attempt + 1,
@@ -253,6 +269,11 @@ public final class MultiplayerQuizViewModel: ObservableObject {
             print("[MultiplayerQuizViewModel] Received empty questions — ending game")
             isGameOver = true
             gameResult = .opponentDisconnected
+            return
+        }
+
+        if gameCoordinator.isHardenedMatch,
+           config.questions.count != rules.sessions.multiplayerQuestionCount {
             return
         }
 
@@ -377,8 +398,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
     private func handleBothAnswersReceived(opponentAnswer: AnswerPayload) {
         guard isHost else { return }
-
-        let myAns = hostAnswer!
+        guard let myAns = hostAnswer, roundResult == nil else { return }
         let oppAns = opponentAnswer
 
         let hostMs = myAns.responseTimeMs
@@ -425,6 +445,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     // MARK: - Apply Round Result
 
     private func applyRoundResult(_ result: QuestionResultPayload) {
+        guard roundResult == nil, result.questionIndex == currentQuestionIndex else { return }
         stopTimer()
         roundResult = result
         roundResults.append(result)
@@ -516,6 +537,38 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         }
 
         calculateEndOfMatchCoins(payload: payload)
+        recordTerminalEffectsIfNeeded(payload: payload)
+    }
+
+    private func recordTerminalEffectsIfNeeded(payload: GameEndPayload) {
+        guard !terminalEffectsRecorded else { return }
+        terminalEffectsRecorded = true
+
+        if let progressManager, let matchID = gameCoordinator.matchID {
+            let fingerprint = [
+                matchID.uuidString,
+                String(myScore),
+                String(opponentScore),
+                String(currentQuestionIndex + 1),
+                String(myCorrectCount),
+                String(coinsEarned),
+                String(describing: gameResult)
+            ].joined(separator: "|")
+            let outcome = progressManager.recordMultiplayerResult(
+                matchID: matchID.uuidString,
+                fingerprint: fingerprint,
+                won: gameResult == .won,
+                draw: gameResult == .draw,
+                score: myScore,
+                questionsCompleted: currentQuestionIndex + 1,
+                questionsCorrect: myCorrectCount,
+                coinsEarned: coinsEarned,
+                responseTimes: myResponseTimes
+            )
+            // The durable receipt is also the analytics idempotency boundary:
+            // a recreated view model must not report an already-applied match.
+            guard outcome == .recorded else { return }
+        }
         logMatchAnalytics()
     }
 
@@ -531,13 +584,14 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
         let duration = Self.clampedWholeSeconds(activeMatchDuration)
 
+        guard let transportLabel = gameCoordinator.matchConfigurationAnalyticsLabel else { return }
         analytics?.logMultiplayerMatchCompleted(
             result: resultString,
             myScore: myScore,
             opponentScore: opponentScore,
             questionsCompleted: currentQuestionIndex + 1,
             durationSeconds: duration,
-            transportType: "nearby"
+            transportType: transportLabel
         )
     }
 
@@ -705,6 +759,15 @@ public final class MultiplayerQuizViewModel: ObservableObject {
                 let localName = self.gameCoordinator.transport?.localPlayer.displayName ?? ""
                 print("[MultiplayerQuizViewModel] Guest handling gameConfig, localName=\(localName)")
                 self.handleGameConfig(config, localDisplayName: localName)
+            }
+            .store(in: &cancellables)
+
+        gameCoordinator.$handshakeAccepted
+            .filter { $0 }
+            .sink { [weak self] _ in
+                guard let self, let pending = self.pendingHostSetup else { return }
+                self.pendingHostSetup = nil
+                self.completeHostSetup(questions: pending.questions, localDisplayName: pending.localDisplayName)
             }
             .store(in: &cancellables)
     }

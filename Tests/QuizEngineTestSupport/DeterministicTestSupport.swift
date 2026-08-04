@@ -449,8 +449,12 @@ public final class FakeTransport: MultiplayerTransport {
     public private(set) var connectionState: TransportConnectionState = .idle
     public private(set) var eventStream: AsyncStream<MultiplayerTransportEvent>
     public private(set) var sentMessages: [MultiplayerMessage] = []
+    public private(set) var rawPayloadEventStream: AsyncStream<MultiplayerRawPayloadEvent>
+    public private(set) var sentRawPayloads: [Data] = []
+    public var supportsRawPayloads: Bool { true }
 
     private var continuation: AsyncStream<MultiplayerTransportEvent>.Continuation
+    private var rawContinuation: AsyncStream<MultiplayerRawPayloadEvent>.Continuation
 
     public init(
         localPlayer: MultiplayerPlayer = MultiplayerPlayer(id: "test", displayName: "Test")
@@ -459,6 +463,9 @@ public final class FakeTransport: MultiplayerTransport {
         let (stream, continuation) = AsyncStream.makeStream(of: MultiplayerTransportEvent.self)
         eventStream = stream
         self.continuation = continuation
+        let (rawStream, rawContinuation) = AsyncStream.makeStream(of: MultiplayerRawPayloadEvent.self)
+        rawPayloadEventStream = rawStream
+        self.rawContinuation = rawContinuation
     }
 
     public func startSearching() {
@@ -477,6 +484,10 @@ public final class FakeTransport: MultiplayerTransport {
         sentMessages.append(message)
     }
 
+    public func sendRawPayload(_ data: Data) throws {
+        sentRawPayloads.append(data)
+    }
+
     public func disconnect() {
         connectionState = .disconnected
     }
@@ -485,11 +496,19 @@ public final class FakeTransport: MultiplayerTransport {
         continuation.yield(event)
     }
 
+    public func emitRaw(_ data: Data, from sender: MultiplayerPlayer) {
+        rawContinuation.yield(.init(data: data, sender: sender))
+    }
+
     public func resetEventStream() {
         continuation.finish()
         let (stream, continuation) = AsyncStream.makeStream(of: MultiplayerTransportEvent.self)
         eventStream = stream
         self.continuation = continuation
+        rawContinuation.finish()
+        let (rawStream, rawContinuation) = AsyncStream.makeStream(of: MultiplayerRawPayloadEvent.self)
+        rawPayloadEventStream = rawStream
+        self.rawContinuation = rawContinuation
     }
 }
 

@@ -232,6 +232,28 @@ public struct CategoryStat: Codable, Equatable, Sendable {
 
 // MARK: - Player Progress
 
+/// A durable receipt for an already-applied multiplayer result.
+///
+/// The receipt is deliberately value-only so Core does not depend on the
+/// multiplayer product. Its fingerprint prevents a reused match identifier
+/// from silently changing a player's statistics or reward.
+public struct MultiplayerMatchReceipt: Codable, Equatable, Sendable {
+    public let matchID: String
+    public let fingerprint: String
+
+    public init(matchID: String, fingerprint: String) {
+        self.matchID = matchID
+        self.fingerprint = fingerprint
+    }
+}
+
+public enum MultiplayerResultRecordingOutcome: Equatable, Sendable {
+    case recorded
+    case alreadyRecorded
+    case conflictingReceipt
+    case rejected
+}
+
 public struct PlayerProgress: Codable, Equatable, Sendable {
     public var coins: Int
     public var currentStreak: Int
@@ -345,6 +367,10 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
     public var multiplayerTotalQuestionsAnswered: Int
     public var multiplayerTotalQuestionsCorrect: Int
 
+    /// Bounded durable history used to make multiplayer terminal rewards
+    /// idempotent across presentation retries and process recreation.
+    public var multiplayerMatchReceipts: [MultiplayerMatchReceipt]
+
     // MARK: - Memberwise Init
 
     public init(
@@ -387,6 +413,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         multiplayerTotalResponseTimeMs: Int = 0,
         multiplayerTotalQuestionsAnswered: Int = 0,
         multiplayerTotalQuestionsCorrect: Int = 0,
+        multiplayerMatchReceipts: [MultiplayerMatchReceipt] = [],
         powerUpCredits: [PowerUp: Int] = [:]
     ) {
         self.coins = coins
@@ -428,6 +455,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         self.multiplayerTotalResponseTimeMs = multiplayerTotalResponseTimeMs
         self.multiplayerTotalQuestionsAnswered = multiplayerTotalQuestionsAnswered
         self.multiplayerTotalQuestionsCorrect = multiplayerTotalQuestionsCorrect
+        self.multiplayerMatchReceipts = multiplayerMatchReceipts
         self.powerUpCredits = powerUpCredits
     }
 
@@ -543,6 +571,16 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         multiplayerTotalResponseTimeMs = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalResponseTimeMs) ?? 0
         multiplayerTotalQuestionsAnswered = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalQuestionsAnswered) ?? 0
         multiplayerTotalQuestionsCorrect = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalQuestionsCorrect) ?? 0
+        multiplayerMatchReceipts = try container.decodeIfPresent([MultiplayerMatchReceipt].self, forKey: .multiplayerMatchReceipts) ?? []
+        guard multiplayerMatchReceipts.count <= 256,
+              Set(multiplayerMatchReceipts.map(\.matchID)).count == multiplayerMatchReceipts.count,
+              multiplayerMatchReceipts.allSatisfy({ !$0.matchID.isEmpty && !$0.fingerprint.isEmpty }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .multiplayerMatchReceipts,
+                in: container,
+                debugDescription: "Multiplayer match receipts must be unique, bounded, and non-empty."
+            )
+        }
     }
 
     // MARK: - Date Formatting

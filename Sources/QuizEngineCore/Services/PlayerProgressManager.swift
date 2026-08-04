@@ -1144,6 +1144,104 @@ public class PlayerProgressManager: ObservableObject {
         save()
     }
 
+    /// Records a multiplayer result once for a stable match identifier.
+    ///
+    /// The receipt and every statistic/reward mutation are persisted by the
+    /// same transaction. A repeated identical terminal callback is therefore
+    /// harmless even after the process is recreated.
+    @discardableResult
+    public func recordMultiplayerResult(
+        matchID: String,
+        fingerprint: String,
+        won: Bool,
+        draw: Bool,
+        score: Int,
+        questionsCompleted: Int,
+        questionsCorrect: Int,
+        coinsEarned: Int,
+        responseTimes: [Int]
+    ) -> MultiplayerResultRecordingOutcome {
+        guard !matchID.isEmpty,
+              !fingerprint.isEmpty,
+              questionsCompleted >= 0,
+              questionsCorrect >= 0,
+              questionsCorrect <= questionsCompleted,
+              coinsEarned >= 0,
+              responseTimes.allSatisfy({ $0 >= 0 }) else {
+            return .rejected
+        }
+
+        if let receipt = progress.multiplayerMatchReceipts.first(where: { $0.matchID == matchID }) {
+            return receipt.fingerprint == fingerprint ? .alreadyRecorded : .conflictingReceipt
+        }
+
+        let snapshot = progress
+        let totalResponseTime = responseTimes.reduce(into: 0) { partial, value in
+            let (next, overflow) = partial.addingReportingOverflow(value)
+            partial = overflow ? Int.max : next
+        }
+        guard totalResponseTime != Int.max else { return .rejected }
+
+        let values = [
+            progress.multiplayerGamesPlayed,
+            progress.multiplayerGamesWon,
+            progress.multiplayerGamesLost,
+            progress.multiplayerGamesDraw,
+            progress.multiplayerWinStreak,
+            progress.multiplayerTotalResponseTimeMs,
+            progress.multiplayerTotalQuestionsAnswered,
+            progress.multiplayerTotalQuestionsCorrect
+        ]
+        guard values.allSatisfy({ $0 >= 0 }) else { return .rejected }
+
+        let (newCoins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsEarned)
+        let (newTotalCoinsEarned, earnedOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsEarned)
+        let (newGamesPlayed, gamesOverflow) = progress.multiplayerGamesPlayed.addingReportingOverflow(1)
+        let (newResponseTime, responseOverflow) = progress.multiplayerTotalResponseTimeMs.addingReportingOverflow(totalResponseTime)
+        let (newQuestionsAnswered, answeredOverflow) = progress.multiplayerTotalQuestionsAnswered.addingReportingOverflow(questionsCompleted)
+        let (newQuestionsCorrect, correctOverflow) = progress.multiplayerTotalQuestionsCorrect.addingReportingOverflow(questionsCorrect)
+        guard !coinsOverflow, !earnedOverflow, !gamesOverflow, !responseOverflow, !answeredOverflow, !correctOverflow else {
+            return .rejected
+        }
+
+        progress.multiplayerGamesPlayed = newGamesPlayed
+        if draw {
+            let (next, overflow) = progress.multiplayerGamesDraw.addingReportingOverflow(1)
+            guard !overflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesDraw = next
+            progress.multiplayerWinStreak = 0
+        } else if won {
+            let (wins, winsOverflow) = progress.multiplayerGamesWon.addingReportingOverflow(1)
+            let (streak, streakOverflow) = progress.multiplayerWinStreak.addingReportingOverflow(1)
+            guard !winsOverflow, !streakOverflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesWon = wins
+            progress.multiplayerWinStreak = streak
+            progress.longestMultiplayerWinStreak = max(progress.longestMultiplayerWinStreak, streak)
+        } else {
+            let (losses, overflow) = progress.multiplayerGamesLost.addingReportingOverflow(1)
+            guard !overflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesLost = losses
+            progress.multiplayerWinStreak = 0
+        }
+
+        progress.bestMultiplayerScore = max(progress.bestMultiplayerScore, score)
+        progress.multiplayerTotalResponseTimeMs = newResponseTime
+        progress.multiplayerTotalQuestionsAnswered = newQuestionsAnswered
+        progress.multiplayerTotalQuestionsCorrect = newQuestionsCorrect
+        progress.coins = newCoins
+        progress.totalCoinsEarned = newTotalCoinsEarned
+        progress.multiplayerMatchReceipts.append(.init(matchID: matchID, fingerprint: fingerprint))
+        if progress.multiplayerMatchReceipts.count > 256 {
+            progress.multiplayerMatchReceipts.removeFirst(progress.multiplayerMatchReceipts.count - 256)
+        }
+
+        guard save() else {
+            progress = snapshot
+            return .rejected
+        }
+        return .recorded
+    }
+
     // MARK: - Question Seen Tracking
 
     /// Records that a question was shown to the user (for content freshness tracking)

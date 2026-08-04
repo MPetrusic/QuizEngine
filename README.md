@@ -83,3 +83,9 @@ The package's `QuizEngineTestSupport` target is test-only and is not exposed as 
 ## Solo session state and effects
 
 `QuizViewModel` remains `@MainActor` and keeps its established published flags and methods for existing SwiftUI consumers. New consumers can instead observe its immutable `sessionState` and drain `consumeSessionEffects()`. `SoloQuizSessionState` models answering, answer feedback, description, extra-life, transition, and terminal phases; `SoloQuizSessionEffect` expresses presentation work as `Sendable` values. These values cannot unlock an answer or re-run a terminal transition. `exitGame()` is terminal without awarding a completed-session result; repeated terminal, delayed, or rewarded-ad callbacks are ignored.
+
+## Hardened multiplayer
+
+QE-6 multiplayer uses the additive raw-payload transport path. Start hardened matches with a throwing `MultiplayerMatchConfiguration` containing an app-owned content version and analytics transport label. Peers negotiate protocol/capabilities and must have the exact same content version before the host sends questions. `MultiplayerWireCodec` owns bounded decoding; envelopes carry a host-created match ID, sequence, and replay ID. Existing message transports remain source-compatible but cannot start a hardened match.
+
+Pass the shared `PlayerProgressManager` to `MultiplayerQuizViewModel` to persist the terminal result. The manager records a bounded match receipt with the reward/statistics transaction, so duplicate terminal callbacks and post-restart repeats are no-ops.

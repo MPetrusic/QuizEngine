@@ -12,4 +12,8 @@ Create host questions from `QuestionDataService(variant:)` so the configured mul
 
 Inject the same deterministic inputs in tests: a seeded host RNG determines the transmitted match seed, that seed plus question index determines answer order, and the clock/scheduler pair determines timeout decisions. Timer rollback cannot increase remaining time. Pause, reconnect, and app background stop elapsed-time accounting; resuming starts from the preserved remainder.
 
-Rules are not yet negotiated on the wire. Both peers must use the same bundled variant. Protocol/version negotiation, payload hardening, reconnect idempotence, and coordinator timeout policy belong to later multiplayer hardening work.
+For QE-6 hardened matches, implement the additive raw-payload members of `MultiplayerTransport`, start through the `matchConfiguration:` coordinator overload, and forward bytes unchanged. `MultiplayerMatchConfiguration` requires an app-supplied content version and analytics transport label. The package requires an exact content-version match and all QE-6 capabilities before configuration; it does not infer either value from an app bundle or hardcode a transport name.
+
+`MultiplayerWireCodec` rejects payloads above 256 KiB. The coordinator validates sender, match ID, replay ID, sequence uniqueness, phase, round index, bounded fields, and host/guest authority before mutating state. Duplicate, stale, future-round, and replayed inputs are ignored; malformed or incompatible input ends the match once with a typed `terminalFailure`. Legacy typed-message transports remain source-compatible but are not a hardened path.
+
+Supply the shared `PlayerProgressManager` to `MultiplayerQuizViewModel`. Its match-ID receipt persists with multiplayer statistics and coins, preventing repeated terminal presentation, reconnect callbacks, and process recreation from awarding twice.

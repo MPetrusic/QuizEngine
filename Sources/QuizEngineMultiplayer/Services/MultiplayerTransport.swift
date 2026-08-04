@@ -42,6 +42,198 @@ public enum MultiplayerRole: Codable, Sendable {
     case guest
 }
 
+// MARK: - Hardened wire protocol
+
+/// Features a peer must understand before a QE-6 match can start.
+public enum MultiplayerCapability: String, Codable, CaseIterable, Hashable, Sendable {
+    case sequencedEnvelopeV1
+    case validatedPayloadV1
+    case idempotentTerminalReceiptV1
+}
+
+public enum MultiplayerMatchConfigurationError: Error, Equatable, Sendable {
+    case invalidProtocolVersion
+    case invalidContentVersion
+    case invalidAnalyticsTransportLabel
+    case missingRequiredCapabilities
+}
+
+/// App-owned match identity and compatibility policy. Content versions must
+/// match exactly; the package does not infer them from an app bundle.
+public struct MultiplayerMatchConfiguration: Equatable, Sendable {
+    public static let protocolVersion = 1
+    public static let requiredQE6Capabilities: Set<MultiplayerCapability> = [
+        .sequencedEnvelopeV1,
+        .validatedPayloadV1,
+        .idempotentTerminalReceiptV1
+    ]
+
+    public let protocolVersion: Int
+    public let contentVersion: String
+    public let requiredCapabilities: Set<MultiplayerCapability>
+    public let analyticsTransportLabel: String
+
+    public init(
+        protocolVersion: Int = MultiplayerMatchConfiguration.protocolVersion,
+        contentVersion: String,
+        requiredCapabilities: Set<MultiplayerCapability> = MultiplayerMatchConfiguration.requiredQE6Capabilities,
+        analyticsTransportLabel: String
+    ) throws {
+        guard protocolVersion > 0 else { throw MultiplayerMatchConfigurationError.invalidProtocolVersion }
+        guard !contentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              contentVersion.utf8.count <= 128 else {
+            throw MultiplayerMatchConfigurationError.invalidContentVersion
+        }
+        guard !analyticsTransportLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              analyticsTransportLabel.utf8.count <= 64 else {
+            throw MultiplayerMatchConfigurationError.invalidAnalyticsTransportLabel
+        }
+        guard requiredCapabilities.isSuperset(of: MultiplayerMatchConfiguration.requiredQE6Capabilities) else {
+            throw MultiplayerMatchConfigurationError.missingRequiredCapabilities
+        }
+        self.protocolVersion = protocolVersion
+        self.contentVersion = contentVersion
+        self.requiredCapabilities = requiredCapabilities
+        self.analyticsTransportLabel = analyticsTransportLabel
+    }
+}
+
+public enum MultiplayerHandshakeStatus: Equatable, Sendable {
+    case idle
+    case negotiating
+    case accepted
+    case rejected(MultiplayerSessionFailure)
+}
+
+public enum MultiplayerSessionFailure: Equatable, Sendable {
+    case unsupportedWireTransport
+    case protocolMismatch
+    case contentMismatch
+    case capabilityMismatch
+    case malformedPayload
+    case unexpectedMessage
+    case wrongSender
+}
+
+public struct MultiplayerHandshakePayload: Codable, Equatable, Sendable {
+    public let protocolVersion: Int
+    public let contentVersion: String
+    public let capabilities: Set<MultiplayerCapability>
+
+    public init(protocolVersion: Int, contentVersion: String, capabilities: Set<MultiplayerCapability>) {
+        self.protocolVersion = protocolVersion
+        self.contentVersion = contentVersion
+        self.capabilities = capabilities
+    }
+}
+
+/// Immutable question representation used only across the hardened wire.
+public struct MultiplayerWireAnswer: Codable, Equatable, Sendable {
+    public let text: String
+    public let correct: Bool
+
+    public init(text: String, correct: Bool) {
+        self.text = text
+        self.correct = correct
+    }
+}
+
+public struct MultiplayerWireQuestion: Codable, Equatable, Sendable {
+    public let id: Int
+    public let question: String
+    public let answers: [MultiplayerWireAnswer]
+    public let imageName: String?
+    public let description: String?
+    public let categories: [String]
+    public let difficulty: Int
+
+    public init(_ question: Question) {
+        id = question.id
+        self.question = question.question
+        answers = question.answers.map { .init(text: $0.text, correct: $0.correct) }
+        imageName = question.imageName
+        description = question.description
+        categories = question.categories
+        difficulty = question.difficulty
+    }
+
+    public func makeQuestion() -> Question {
+        Question(id: id, question: question, answers: answers.map { .init(text: $0.text, correct: $0.correct) }, imageName: imageName, description: description, categories: categories, difficulty: difficulty)
+    }
+}
+
+public struct MultiplayerWireGameConfigPayload: Codable, Equatable, Sendable {
+    public let questions: [MultiplayerWireQuestion]
+    public let seed: UInt64
+
+    public init(_ configuration: GameConfigPayload) {
+        questions = configuration.questions.map(MultiplayerWireQuestion.init)
+        seed = configuration.seed
+    }
+
+    public func makeGameConfig() -> GameConfigPayload {
+        GameConfigPayload(questions: questions.map { $0.makeQuestion() }, seed: seed)
+    }
+}
+
+public enum MultiplayerWirePayload: Codable, Equatable, Sendable {
+    case hello(MultiplayerHandshakePayload)
+    case acknowledged(MultiplayerHandshakePayload)
+    case gameConfig(MultiplayerWireGameConfigPayload)
+    case playerReady(roundIndex: Int)
+    case answerSubmitted(AnswerPayload)
+    case questionResult(QuestionResultPayload)
+    case gameEnd(GameEndPayload)
+    case pause
+    case resume
+}
+
+public struct MultiplayerWireEnvelope: Codable, Equatable, Sendable {
+    public let matchID: UUID
+    public let sequence: UInt64
+    public let messageID: UUID
+    public let payload: MultiplayerWirePayload
+
+    public init(matchID: UUID, sequence: UInt64, messageID: UUID = UUID(), payload: MultiplayerWirePayload) {
+        self.matchID = matchID
+        self.sequence = sequence
+        self.messageID = messageID
+        self.payload = payload
+    }
+}
+
+public enum MultiplayerWireCodecError: Error, Equatable, Sendable {
+    case payloadTooLarge
+    case encodingFailed
+    case decodingFailed
+}
+
+/// The only codec used by the hardened raw-payload path.
+public enum MultiplayerWireCodec {
+    public static let maximumPayloadBytes = 256 * 1024
+
+    public static func encode(_ envelope: MultiplayerWireEnvelope) throws -> Data {
+        do { return try JSONEncoder().encode(envelope) }
+        catch { throw MultiplayerWireCodecError.encodingFailed }
+    }
+
+    public static func decode(_ data: Data) throws -> MultiplayerWireEnvelope {
+        guard !data.isEmpty, data.count <= maximumPayloadBytes else { throw MultiplayerWireCodecError.payloadTooLarge }
+        do { return try JSONDecoder().decode(MultiplayerWireEnvelope.self, from: data) }
+        catch { throw MultiplayerWireCodecError.decodingFailed }
+    }
+}
+
+public struct MultiplayerRawPayloadEvent: Sendable {
+    public let data: Data
+    public let sender: MultiplayerPlayer
+
+    public init(data: Data, sender: MultiplayerPlayer) {
+        self.data = data
+        self.sender = sender
+    }
+}
+
 // MARK: - Messages
 
 public enum MultiplayerMessage: Codable, Sendable {
@@ -76,6 +268,8 @@ public struct GameConfigPayload: Codable, Sendable {
     }
 }
 
+extension GameConfigPayload: Equatable {}
+
 public struct AnswerPayload: Codable, Sendable {
     public let questionIndex: Int
     public let answerIndex: Int
@@ -87,6 +281,8 @@ public struct AnswerPayload: Codable, Sendable {
         self.responseTimeMs = responseTimeMs
     }
 }
+
+extension AnswerPayload: Equatable {}
 
 public struct QuestionResultPayload: Codable, Sendable {
     public let questionIndex: Int
@@ -113,6 +309,8 @@ public struct QuestionResultPayload: Codable, Sendable {
         self.guestTotalScore = guestTotalScore
     }
 }
+
+extension QuestionResultPayload: Equatable {}
 
 public struct GameEndPayload: Codable, Sendable, Equatable {
     public let hostFinalScore: Int
@@ -221,17 +419,36 @@ public protocol MultiplayerTransport: AnyObject {
     var connectionState: TransportConnectionState { get }
     var eventStream: AsyncStream<MultiplayerTransportEvent> { get }
 
+    /// Hardened transports expose raw bytes to QuizEngine so it owns decoding
+    /// and validation. Legacy transports receive a default empty stream and
+    /// remain source-compatible, but cannot start a QE-6 match.
+    var rawPayloadEventStream: AsyncStream<MultiplayerRawPayloadEvent> { get }
+    var supportsRawPayloads: Bool { get }
+
     func startSearching()
     func stopSearching()
     func invite(player: MultiplayerPlayer)
     func acceptInvite(from player: MultiplayerPlayer)
     func declineInvite(from player: MultiplayerPlayer)
     func send(message: MultiplayerMessage) throws
+    func sendRawPayload(_ data: Data) throws
     func disconnect()
 
     /// Resets the event stream, creating a fresh stream for new consumers.
     /// Call this when transferring ownership (e.g., from lobby to game coordinator).
     func resetEventStream()
+}
+
+public extension MultiplayerTransport {
+    var rawPayloadEventStream: AsyncStream<MultiplayerRawPayloadEvent> {
+        AsyncStream { continuation in continuation.finish() }
+    }
+
+    var supportsRawPayloads: Bool { false }
+
+    func sendRawPayload(_ data: Data) throws {
+        throw MultiplayerTransportError.notConnected
+    }
 }
 
 // MARK: - Game Coordinator Protocol

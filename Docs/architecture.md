@@ -58,6 +58,8 @@ Clock rollback is conservative: elapsed values never become negative or increase
 
 Single-player rule flow is an explicit state/effect reducer. `SoloQuizSessionState` and `SoloQuizSessionEffect` are immutable, `Sendable` values; the `@MainActor` view model publishes them while preserving the established flags and methods as compatibility projections. The reducer locks answers before feedback, rejects races and stale scheduled work by state/generation, and makes completed/exited terminal paths once-only. SwiftUI owns animations and sheets after observing an effect; it does not decide rule validity.
 
+Hardened multiplayer similarly keeps UI-facing coordinators and view models on the main actor while transporting only immutable `Sendable` envelopes and payloads. A host-created match ID, exact protocol/content handshake, capability set, sender identity, replay ID, and phase/round checks guard every wire transition. Lifecycle timers capture the active match generation; terminal entry cancels them and cannot be reversed. The app provides its transport analytics label in `MultiplayerMatchConfiguration`.
+
 ## Serbian Quiz is a reference, not a template
 
 `SerbianQuizVariantDefinition` shows the correct composition pattern. Its categories, achievement IDs, question resource, views, theme, Firebase/ads/StoreKit/Game Center adapters, and multiplayer transports are Serbian Quiz implementation details. New apps define all of those independently.

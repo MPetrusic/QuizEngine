@@ -413,6 +413,153 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         premium.endMatch()
     }
 
+    func testHardenedHandshakeRequiresExactContentAndCapabilities() async throws {
+        let scheduler = TestScheduler()
+        let coordinator = MultiplayerGameCoordinator(scheduler: scheduler)
+        let transport = FakeTransport()
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        let configuration = try hardenedConfiguration(contentVersion: "content-a")
+        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
+
+        let envelope = MultiplayerWireEnvelope(
+            matchID: UUID(), sequence: 0,
+            payload: .hello(.init(
+                protocolVersion: MultiplayerMatchConfiguration.protocolVersion,
+                contentVersion: "content-a",
+                capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities
+            ))
+        )
+        transport.emitRaw(try MultiplayerWireCodec.encode(envelope), from: opponent)
+        await drainTransportEvents()
+
+        XCTAssertTrue(coordinator.handshakeAccepted)
+        XCTAssertEqual(coordinator.handshakeStatus, .accepted)
+        XCTAssertEqual(transport.sentRawPayloads.count, 1)
+    }
+
+    func testHardenedHandshakeRejectsContentMismatchAndMalformedPayloadOnce() async throws {
+        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        let transport = FakeTransport()
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        let configuration = try hardenedConfiguration(contentVersion: "content-a")
+        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: UUID(), sequence: 0,
+            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-b", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
+        )), from: opponent)
+        await drainTransportEvents()
+        XCTAssertEqual(coordinator.terminalFailure, .contentMismatch)
+        let terminal = coordinator.gameEndResult
+        transport.emitRaw(Data(repeating: 0, count: MultiplayerWireCodec.maximumPayloadBytes + 1), from: opponent)
+        await drainTransportEvents()
+        XCTAssertEqual(coordinator.gameEndResult, terminal)
+    }
+
+    func testHardenedPayloadReplayAndFutureRoundAreHarmless() async throws {
+        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        let transport = FakeTransport()
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        let configuration = try hardenedConfiguration(contentVersion: "content-a")
+        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
+        let matchID = UUID()
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 0,
+            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-a", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
+        )), from: opponent)
+        await drainTransportEvents()
+
+        let config = GameConfigPayload(questions: [
+            Question(id: 10, question: "Q", answers: [Answer(text: "A", correct: true), Answer(text: "B", correct: false)], categories: ["alpha"])
+        ], seed: 1)
+        let messageID = UUID()
+        let valid = MultiplayerWireEnvelope(matchID: matchID, sequence: 1, messageID: messageID, payload: .gameConfig(.init(config)))
+        transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: opponent)
+        await drainTransportEvents()
+        transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: opponent)
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 3, payload: .playerReady(roundIndex: 99)
+        )), from: opponent)
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
+        )), from: opponent)
+        await drainTransportEvents()
+        coordinator.questionsCompleted = 1
+        coordinator.lastHostScore = 10
+        coordinator.lastGuestScore = 5
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 4,
+            payload: .gameEnd(.init(hostFinalScore: 999, guestFinalScore: 5, reason: .completed))
+        )), from: opponent)
+        await drainTransportEvents()
+
+        XCTAssertEqual(coordinator.receivedGameConfig, config)
+        XCTAssertTrue(coordinator.opponentReady)
+        XCTAssertNil(coordinator.terminalFailure)
+        XCTAssertNil(coordinator.gameEndResult)
+
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: UUID(), sequence: 5, payload: .pause
+        )), from: opponent)
+        await drainTransportEvents()
+        XCTAssertNil(coordinator.terminalFailure)
+    }
+
+    func testHardenedGameConfigurationRejectsUnplayableFields() async throws {
+        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        let transport = FakeTransport()
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        let configuration = try hardenedConfiguration(contentVersion: "content-a")
+        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
+        let matchID = UUID()
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 0,
+            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-a", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
+        )), from: opponent)
+        await drainTransportEvents()
+
+        let invalid = GameConfigPayload(questions: [
+            Question(id: 10, question: "", answers: [Answer(text: "A", correct: true), Answer(text: "B", correct: false)], categories: [])
+        ], seed: 1)
+        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: matchID, sequence: 1, payload: .gameConfig(.init(invalid))
+        )), from: opponent)
+        await drainTransportEvents()
+
+        XCTAssertEqual(coordinator.terminalFailure, .malformedPayload)
+    }
+
+    func testHardenedWrongSenderIsIgnoredAndLegacyTransportIsRejected() async throws {
+        let configuration = try hardenedConfiguration(contentVersion: "content-a")
+        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        let transport = FakeTransport()
+        coordinator.startGame(
+            transport: transport,
+            opponent: MultiplayerPlayer(id: "host", displayName: "Host"),
+            role: .guest,
+            matchConfiguration: configuration
+        )
+        transport.emitRaw(Data(), from: MultiplayerPlayer(id: "attacker", displayName: "Attacker"))
+        await drainTransportEvents()
+        XCTAssertNil(coordinator.terminalFailure)
+
+        let legacyCoordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        legacyCoordinator.startGame(
+            transport: LegacyTransport(),
+            opponent: MultiplayerPlayer(id: "host", displayName: "Host"),
+            role: .guest,
+            matchConfiguration: configuration
+        )
+        XCTAssertEqual(legacyCoordinator.terminalFailure, .unsupportedWireTransport)
+    }
+
+    private func hardenedConfiguration(contentVersion: String) throws -> MultiplayerMatchConfiguration {
+        try MultiplayerMatchConfiguration(contentVersion: contentVersion, analyticsTransportLabel: "test")
+    }
+
+    private func drainTransportEvents() async {
+        for _ in 0..<12 { await Task.yield() }
+    }
+
     private func hostCoordinator() -> MultiplayerGameCoordinator {
         let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
         coordinator.startGame(
@@ -451,4 +598,19 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         viewModel.startRound()
         return viewModel
     }
+}
+
+@MainActor
+private final class LegacyTransport: MultiplayerTransport {
+    let localPlayer = MultiplayerPlayer(id: "legacy", displayName: "Legacy")
+    var connectionState: TransportConnectionState = .connected
+    let eventStream: AsyncStream<MultiplayerTransportEvent> = AsyncStream { $0.finish() }
+    func startSearching() {}
+    func stopSearching() {}
+    func invite(player: MultiplayerPlayer) {}
+    func acceptInvite(from player: MultiplayerPlayer) {}
+    func declineInvite(from player: MultiplayerPlayer) {}
+    func send(message: MultiplayerMessage) throws {}
+    func disconnect() { connectionState = .disconnected }
+    func resetEventStream() {}
 }
