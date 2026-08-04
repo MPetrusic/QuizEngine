@@ -41,13 +41,18 @@ public class PlayerProgressManager: ObservableObject {
     ) {
         self.variant = variant
         self.questionDataService = questionDataService
-        self.achievementService = AchievementService(variant: variant)
+        self.achievementService = AchievementService(
+            variant: variant,
+            clock: clock,
+            calendar: calendar
+        )
         self.analytics = analytics
         self.purchaseStatus = purchaseStatus
         self.persistenceStore = persistenceStore
         self.clock = clock
         self.calendar = calendar
-        let loadResult = Self.load(from: persistenceStore)
+        let freshProgress = PlayerProgress.fresh(initialCoins: variant.rules.economy.initialCoins)
+        let loadResult = Self.load(from: persistenceStore, freshProgress: freshProgress)
         self.progress = loadResult.progress
         self.persistenceStatus = loadResult.status
         self.lastPersistenceError = loadResult.error
@@ -553,14 +558,17 @@ public class PlayerProgressManager: ObservableObject {
         return restored
     }
 
-    private static func load(from store: any QuizEnginePersistenceStore) -> PlayerProgressLoadResult {
+    private static func load(
+        from store: any QuizEnginePersistenceStore,
+        freshProgress: PlayerProgress
+    ) -> PlayerProgressLoadResult {
         do {
             return try store.withExclusiveAccess {
-                loadUnlocked(from: store)
+                loadUnlocked(from: store, freshProgress: freshProgress)
             }
         } catch let error as PersistenceError {
             return PlayerProgressLoadResult(
-                progress: .default,
+                progress: freshProgress,
                 status: .failed(error),
                 error: error
             )
@@ -570,14 +578,17 @@ public class PlayerProgressManager: ObservableObject {
                 reason: error.localizedDescription
             )
             return PlayerProgressLoadResult(
-                progress: .default,
+                progress: freshProgress,
                 status: .failed(persistenceError),
                 error: persistenceError
             )
         }
     }
 
-    private static func loadUnlocked(from store: any QuizEnginePersistenceStore) -> PlayerProgressLoadResult {
+    private static func loadUnlocked(
+        from store: any QuizEnginePersistenceStore,
+        freshProgress: PlayerProgress
+    ) -> PlayerProgressLoadResult {
         var recoveryStatus: PersistenceStatus?
 
         do {
@@ -692,7 +703,7 @@ public class PlayerProgressManager: ObservableObject {
                     )
                 }
                 return PlayerProgressLoadResult(
-                    progress: .default,
+                    progress: freshProgress,
                     status: recoveryStatus ?? .fresh,
                     error: nil
                 )
@@ -732,7 +743,7 @@ public class PlayerProgressManager: ObservableObject {
             }
         } catch let error as PersistenceError {
             return PlayerProgressLoadResult(
-                progress: .default,
+                progress: freshProgress,
                 status: .failed(error),
                 error: error
             )
@@ -742,7 +753,7 @@ public class PlayerProgressManager: ObservableObject {
                 reason: error.localizedDescription
             )
             return PlayerProgressLoadResult(
-                progress: .default,
+                progress: freshProgress,
                 status: .failed(persistenceError),
                 error: persistenceError
             )
@@ -752,22 +763,28 @@ public class PlayerProgressManager: ObservableObject {
     // MARK: - Coin Operations
 
     public func addCoins(_ amount: Int) {
-        progress.coins += amount
-        progress.totalCoinsEarned += amount
+        guard amount >= 0 else { return }
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(amount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(amount)
+        guard !coinsOverflow, !totalOverflow else { return }
+        progress.coins = coins
+        progress.totalCoinsEarned = total
         save()
     }
 
     public func spendCoins(_ amount: Int) -> Bool {
-        guard progress.coins >= amount else {
+        guard amount >= 0, progress.coins >= amount else {
             return false
         }
+        let (newTotalCoinsSpent, overflow) = progress.totalCoinsSpent.addingReportingOverflow(amount)
+        guard !overflow else { return false }
         progress.coins -= amount
-        progress.totalCoinsSpent += amount
+        progress.totalCoinsSpent = newTotalCoinsSpent
         return save()
     }
 
     public func canAfford(_ amount: Int) -> Bool {
-        return progress.coins >= amount
+        amount >= 0 && progress.coins >= amount
     }
 
     // MARK: - Power-Up Wallet
@@ -800,8 +817,9 @@ public class PlayerProgressManager: ObservableObject {
         if creditBalance > 0 {
             return true
         }
-        guard progress.coins >= powerUp.cost else { return false }
-        return !progress.totalCoinsSpent.addingReportingOverflow(powerUp.cost).overflow
+        let cost = powerUpCost(for: powerUp)
+        guard progress.coins >= cost else { return false }
+        return !progress.totalCoinsSpent.addingReportingOverflow(cost).overflow
     }
 
     /// Consumes a free credit before coins and persists funding and usage as one transaction.
@@ -821,23 +839,28 @@ public class PlayerProgressManager: ObservableObject {
                 coinsSpent: 0
             )
         } else {
-            guard creditBalance == 0, progress.coins >= powerUp.cost else {
+            let cost = powerUpCost(for: powerUp)
+            guard creditBalance == 0, progress.coins >= cost else {
                 return nil
             }
-            let (newTotalCoinsSpent, spendingOverflow) = progress.totalCoinsSpent.addingReportingOverflow(powerUp.cost)
+            let (newTotalCoinsSpent, spendingOverflow) = progress.totalCoinsSpent.addingReportingOverflow(cost)
             guard !spendingOverflow else { return nil }
-            progress.coins -= powerUp.cost
+            progress.coins -= cost
             progress.totalCoinsSpent = newTotalCoinsSpent
             result = PowerUpSpendResult(
                 powerUp: powerUp,
                 fundingSource: .coins,
-                coinsSpent: powerUp.cost
+                coinsSpent: cost
             )
         }
 
         recordPowerUpUsage(powerUp, newUsageCount: newUsageCount)
         guard save() else { return nil }
         return result
+    }
+
+    public func powerUpCost(for powerUp: PowerUp) -> Int {
+        variant.rules.powerUps.rule(for: powerUp)?.coinCost ?? powerUp.cost
     }
 
     /// Marks that the 500 premium bonus coins have been received.
@@ -861,11 +884,14 @@ public class PlayerProgressManager: ObservableObject {
             return nil
         }
 
-        let rewardAmount = progress.dailyRewardAmount()
+        let rewardAmount = progress.dailyRewardAmount(using: variant.rules.economy.dailyRewardTiers)
         let streakDay = progress.currentStreak
 
-        progress.coins += rewardAmount
-        progress.totalCoinsEarned += rewardAmount
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(rewardAmount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(rewardAmount)
+        guard !coinsOverflow, !totalOverflow else { return nil }
+        progress.coins = coins
+        progress.totalCoinsEarned = total
         progress.lastDailyRewardClaimedDate = now
         guard save() else {
             return nil
@@ -935,7 +961,7 @@ public class PlayerProgressManager: ObservableObject {
 
     /// Records the total question count when the user achieves 100% in a category.
     /// Looks up the real category total itself, so it works correctly in both
-    /// category mode and practice mode (where the session is only 20 questions).
+    /// category mode and practice mode with variant-configured session sizes.
     public func markCategoryHundredPercent(category: String) {
         guard var stat = progress.categoryStats[category],
               let totalQuestions = try? questionDataService.getQuestionCount(forCategory: category)
@@ -978,6 +1004,8 @@ public class PlayerProgressManager: ObservableObject {
             save()
             return
         }
+
+        guard today >= lastPlayed else { return }
 
         if calendar.isDate(lastPlayed, inSameDayAs: today) {
             // Already played today, no change
@@ -1081,6 +1109,11 @@ public class PlayerProgressManager: ObservableObject {
         coinsEarned: Int,
         responseTimes: [Int]
     ) {
+        guard coinsEarned >= 0 else { return }
+        let (newCoins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsEarned)
+        let (newTotalCoinsEarned, totalCoinsOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsEarned)
+        guard !coinsOverflow, !totalCoinsOverflow else { return }
+
         progress.multiplayerGamesPlayed += 1
 
         if draw {
@@ -1106,8 +1139,8 @@ public class PlayerProgressManager: ObservableObject {
         progress.multiplayerTotalQuestionsAnswered += questionsCompleted
         progress.multiplayerTotalQuestionsCorrect += questionsCorrect
 
-        progress.coins += coinsEarned
-        progress.totalCoinsEarned += coinsEarned
+        progress.coins = newCoins
+        progress.totalCoinsEarned = newTotalCoinsEarned
         save()
     }
 
@@ -1227,7 +1260,7 @@ public class PlayerProgressManager: ObservableObject {
     }
 
     public var dailyRewardAmount: Int {
-        progress.dailyRewardAmount()
+        progress.dailyRewardAmount(using: variant.rules.economy.dailyRewardTiers)
     }
 
     // NOTE: streakColor was removed — it uses Color.Theme.accentBright which is app-specific.
@@ -1316,23 +1349,30 @@ public class PlayerProgressManager: ObservableObject {
 
     // MARK: - Reward Ad Tracking
 
-    /// Checks if the user can watch a rewarded ad for coins (6-hour cooldown)
+    /// Checks if the user can watch a rewarded ad for coins.
     public func canWatchRewardAd() -> Bool {
         guard let lastWatched = progress.lastRewardAdWatchedDate else {
             return true
         }
         let now = clock.now
-        let hoursSince = now.timeIntervalSince(lastWatched) / 3600
-        return hoursSince >= 6
+        let secondsSince = max(0, now.timeIntervalSince(lastWatched))
+        return secondsSince >= variant.rules.economy.rewardAd.cooldownSeconds
     }
 
-    /// Records that the user watched a rewarded ad and awards coins
-    /// - Parameter coinsAwarded: Number of coins to award (default: 25)
+    public func recordRewardAdWatched() {
+        recordRewardAdWatched(coinsAwarded: variant.rules.economy.rewardAd.coinReward)
+    }
+
+    /// Records that the user watched a rewarded ad and awards an explicit compatibility amount.
     public func recordRewardAdWatched(coinsAwarded: Int = 25) {
+        guard coinsAwarded >= 0 else { return }
         let now = clock.now
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsAwarded)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsAwarded)
+        guard !coinsOverflow, !totalOverflow else { return }
         progress.lastRewardAdWatchedDate = now
-        progress.coins += coinsAwarded
-        progress.totalCoinsEarned += coinsAwarded
+        progress.coins = coins
+        progress.totalCoinsEarned = total
         save()
     }
 
@@ -1343,8 +1383,8 @@ public class PlayerProgressManager: ObservableObject {
             return nil
         }
         let now = clock.now
-        let secondsSince = now.timeIntervalSince(lastWatched)
-        let cooldownSeconds: TimeInterval = 6 * 3600 // 6 hours
+        let secondsSince = max(0, now.timeIntervalSince(lastWatched))
+        let cooldownSeconds = variant.rules.economy.rewardAd.cooldownSeconds
         let remaining = cooldownSeconds - secondsSince
         return remaining > 0 ? remaining : nil
     }
@@ -1554,7 +1594,7 @@ public class PlayerProgressManager: ObservableObject {
     // MARK: - Advanced Statistics
 
     /// Session statistics collected during gameplay for end-of-session recording
-    public struct SessionStatistics {
+    public struct SessionStatistics: Sendable {
         public var questionsAnswered: Int
         public var questionsCorrect: Int
         public var totalResponseTimeMs: Int
@@ -1569,6 +1609,10 @@ public class PlayerProgressManager: ObservableObject {
             self.questionsByDifficulty = [:]
             self.correctByDifficulty = [:]
             self.sessionHour = calendar.component(.hour, from: now)
+        }
+
+        public init(clock: any QuizEngineClock, calendar: Calendar) {
+            self.init(calendar: calendar, now: clock.now)
         }
     }
 

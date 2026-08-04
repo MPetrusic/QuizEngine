@@ -32,6 +32,20 @@ enum MyQuizVariant {
 }
 ```
 
+Add a validated `QuizRulesConfiguration` when product behavior differs from the Serbian-compatible defaults:
+
+```swift
+let variant = try QuizVariantDefinition(
+    categories: MyQuizVariant.categories,
+    achievements: MyQuizVariant.achievements,
+    questionResource: .init(bundle: .main, fileName: "questions"),
+    rules: MyQuizVariant.rules
+)
+let questions = QuestionDataService(variant: variant)
+```
+
+See [Rules and economy configuration](rules-and-economy.md) for the complete inventory and validation contract. The initializer without `rules` remains source-compatible and selects `.serbianCompatible`.
+
 `id` values must be lowercase, non-empty, unique, and permanent after release. Category display orders must be unique. The package sorts categories by display order.
 
 ## Category unlock rules

@@ -32,25 +32,11 @@ public protocol QuizEngineScheduler: AnyObject {
 @MainActor
 public final class MainQueueQuizEngineScheduler: QuizEngineScheduler {
     private final class ScheduledTask: QuizEngineScheduledTask {
-        private final class CancellationState: @unchecked Sendable {
-            var isCancelled = false
-        }
-
-        fileprivate let workItem: DispatchWorkItem
-        private let cancellationState: CancellationState
-
-        init(operation: @escaping @MainActor () -> Void) {
-            let cancellationState = CancellationState()
-            self.cancellationState = cancellationState
-            self.workItem = DispatchWorkItem { [cancellationState] in
-                guard !cancellationState.isCancelled else { return }
-                operation()
-            }
-        }
+        fileprivate var task: Task<Void, Never>?
 
         func cancel() {
-            cancellationState.isCancelled = true
-            workItem.cancel()
+            task?.cancel()
+            task = nil
         }
     }
 
@@ -61,11 +47,16 @@ public final class MainQueueQuizEngineScheduler: QuizEngineScheduler {
         after delay: TimeInterval,
         _ operation: @escaping @MainActor () -> Void
     ) -> any QuizEngineScheduledTask {
-        let task = ScheduledTask(operation: operation)
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + max(0, delay),
-            execute: task.workItem
-        )
-        return task
+        let scheduledTask = ScheduledTask()
+        scheduledTask.task = Task { @MainActor [scheduledTask] in
+            let delay = max(0, delay)
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard !Task.isCancelled else { return }
+            operation()
+            scheduledTask.task = nil
+        }
+        return scheduledTask
     }
 }

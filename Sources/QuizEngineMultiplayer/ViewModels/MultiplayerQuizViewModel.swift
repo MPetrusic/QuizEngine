@@ -16,6 +16,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     public static let questionsPerMatch = 15
     public static let timerDurationMs = 10_000
     public static let timerTickMs = 10
+    private static let timerPrecisionToleranceMs = 0.001
     public static let tieThresholdMs = 10
     public static let roundResultDisplayDurationSeconds: Double = 3.0
 
@@ -120,11 +121,13 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     // MARK: - Private Properties
 
     public let gameCoordinator: MultiplayerGameCoordinator
+    public let rules: QuizRulesConfiguration
     private let analytics: (any AnalyticsProvider)?
     private let interstitialAd: (any InterstitialAdProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
 
     private var timerTask: (any QuizEngineScheduledTask)?
+    private var timerGeneration: UInt = 0
     private var roundAdvanceTask: (any QuizEngineScheduledTask)?
     private var gameConfigRetryTask: (any QuizEngineScheduledTask)?
     private var cancellables = Set<AnyCancellable>()
@@ -132,7 +135,10 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private var randomNumberGenerator: any RandomNumberGenerator
     private let clock: any QuizEngineClock
     private let scheduler: any QuizEngineScheduler
-    private var matchStartTime: Date?
+    private var activeMatchDuration: TimeInterval = 0
+    private var activeMatchSegmentStartTime: Date?
+    private var timerSegmentStartingRemainingMs: Double
+    private var timerRemainingExactMs: Double
 
     // Host-only timing
     private var questionStartTime: Date?
@@ -143,7 +149,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
     // MARK: - Init
 
-    public init(
+    public convenience init(
         gameCoordinator: MultiplayerGameCoordinator,
         analytics: (any AnalyticsProvider)? = nil,
         interstitialAd: (any InterstitialAdProvider)? = nil,
@@ -152,13 +158,39 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
         randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
     ) {
+        self.init(
+            gameCoordinator: gameCoordinator,
+            rules: .serbianCompatible,
+            analytics: analytics,
+            interstitialAd: interstitialAd,
+            purchaseStatus: purchaseStatus,
+            clock: clock,
+            scheduler: scheduler,
+            randomNumberGenerator: randomNumberGenerator
+        )
+    }
+
+    public init(
+        gameCoordinator: MultiplayerGameCoordinator,
+        rules: QuizRulesConfiguration,
+        analytics: (any AnalyticsProvider)? = nil,
+        interstitialAd: (any InterstitialAdProvider)? = nil,
+        purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
         self.gameCoordinator = gameCoordinator
+        self.rules = rules
         self.analytics = analytics
         self.interstitialAd = interstitialAd
         self.purchaseStatus = purchaseStatus
         self.clock = clock
         self.scheduler = scheduler
         self.randomNumberGenerator = randomNumberGenerator
+        self.timeRemainingMs = rules.multiplayer.timerDurationMilliseconds
+        self.timerSegmentStartingRemainingMs = Double(rules.multiplayer.timerDurationMilliseconds)
+        self.timerRemainingExactMs = Double(rules.multiplayer.timerDurationMilliseconds)
         self.isHost = gameCoordinator.role == .host
         self.opponentDisplayName = gameCoordinator.opponent?.displayName ?? String(localized: "multiplayer_quiz_view_model.opponent.fallback_name")
         interstitialAd?.load()
@@ -171,7 +203,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         self.questions = questions
         self.myDisplayName = localDisplayName
         self.seed = UInt64.random(in: 1...UInt64.max, using: &randomNumberGenerator)
-        self.matchStartTime = clock.now
+        resetMatchDuration()
 
         let config = GameConfigPayload(questions: questions, seed: seed)
         sendGameConfigWithRetry(config)
@@ -233,7 +265,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         self.questions = config.questions
         self.seed = config.seed
         self.myDisplayName = localDisplayName
-        self.matchStartTime = clock.now
+        resetMatchDuration()
 
         print("[MultiplayerQuizViewModel] questions.count = \(self.questions.count), calling loadCurrentQuestion")
         loadCurrentQuestion()
@@ -257,7 +289,9 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         guestAnswer = nil
         hostAnswerTime = nil
         guestAnswerTime = nil
-        timeRemainingMs = Self.timerDurationMs
+        timeRemainingMs = rules.multiplayer.timerDurationMilliseconds
+        timerRemainingExactMs = Double(rules.multiplayer.timerDurationMilliseconds)
+        timerSegmentStartingRemainingMs = timerRemainingExactMs
 
         gameCoordinator.prepareForNextRound()
         gameCoordinator.transitionToLoadingRound()
@@ -271,9 +305,10 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     }
 
     public func startRound() {
-        timeRemainingMs = Self.timerDurationMs
+        timeRemainingMs = rules.multiplayer.timerDurationMilliseconds
+        timerRemainingExactMs = Double(rules.multiplayer.timerDurationMilliseconds)
+        timerSegmentStartingRemainingMs = timerRemainingExactMs
         timerActive = true
-        questionStartTime = clock.now
         gameCoordinator.transitionToPlaying()
         startTimer()
     }
@@ -281,9 +316,22 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     // MARK: - Answer Submission
 
     public func submitAnswer(answerIndex: Int) {
-        guard myAnswerIndex == nil, !showingRoundResult else { return }
+        submitAnswer(answerIndex: answerIndex, enforcesDeadline: true)
+    }
 
-        let responseTimeMs = Self.timerDurationMs - timeRemainingMs
+    private func submitAnswer(answerIndex: Int, enforcesDeadline: Bool) {
+        guard myAnswerIndex == nil, !showingRoundResult else { return }
+        if enforcesDeadline {
+            synchronizeTimer()
+            guard myAnswerIndex == nil,
+                  !showingRoundResult,
+                  timerRemainingExactMs > 0 else { return }
+        }
+
+        let responseTimeMs = max(
+            0,
+            rules.multiplayer.timerDurationMilliseconds - timeRemainingMs
+        )
         myAnswerIndex = answerIndex
         myResponseTimeMs = responseTimeMs
         stopTimer()
@@ -322,7 +370,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
     private func handleTimeout() {
         guard myAnswerIndex == nil else { return }
-        submitAnswer(answerIndex: Self.timeoutAnswerIndex)
+        submitAnswer(answerIndex: Self.timeoutAnswerIndex, enforcesDeadline: false)
     }
 
     // MARK: - Round Resolution (Host)
@@ -342,14 +390,20 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         let hostSkipped = myAns.answerIndex == Self.skipAnswerIndex || myAns.answerIndex == Self.timeoutAnswerIndex
         let guestSkipped = oppAns.answerIndex == Self.skipAnswerIndex || oppAns.answerIndex == Self.timeoutAnswerIndex
 
-        let (hostPts, guestPts) = calculatePoints(
-            hostCorrect: hostCorrect, guestCorrect: guestCorrect,
-            hostMs: hostMs, guestMs: guestMs,
-            hostSkipped: hostSkipped, guestSkipped: guestSkipped
+        let points = MultiplayerRuleEvaluator.points(
+            hostCorrect: hostCorrect,
+            guestCorrect: guestCorrect,
+            hostMilliseconds: hostMs,
+            guestMilliseconds: guestMs,
+            hostSkipped: hostSkipped,
+            guestSkipped: guestSkipped,
+            rules: rules.multiplayer
         )
+        let hostPts = points.host
+        let guestPts = points.guest
 
-        let newHostTotal = (isHost ? myScore : opponentScore) + hostPts
-        let newGuestTotal = (isHost ? opponentScore : myScore) + guestPts
+        let newHostTotal = Self.saturatingAdd(isHost ? myScore : opponentScore, hostPts)
+        let newGuestTotal = Self.saturatingAdd(isHost ? opponentScore : myScore, guestPts)
 
         let result = QuestionResultPayload(
             questionIndex: currentQuestionIndex,
@@ -368,43 +422,6 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         applyRoundResult(result)
     }
 
-    private func calculatePoints(hostCorrect: Bool, guestCorrect: Bool, hostMs: Int, guestMs: Int, hostSkipped: Bool, guestSkipped: Bool) -> (Int, Int) {
-        let hostPts: Int
-        let guestPts: Int
-
-        if hostCorrect && guestCorrect {
-            let diff = abs(hostMs - guestMs)
-            if diff < Self.tieThresholdMs {
-                hostPts = Self.pointsTieCorrect
-                guestPts = Self.pointsTieCorrect
-            } else if hostMs < guestMs {
-                hostPts = Self.pointsFasterCorrect
-                guestPts = Self.pointsSlowerCorrect
-            } else {
-                hostPts = Self.pointsSlowerCorrect
-                guestPts = Self.pointsFasterCorrect
-            }
-        } else {
-            if hostCorrect {
-                hostPts = Self.pointsFasterCorrect
-            } else if hostSkipped {
-                hostPts = 0
-            } else {
-                hostPts = Self.pointsWrong
-            }
-
-            if guestCorrect {
-                guestPts = Self.pointsFasterCorrect
-            } else if guestSkipped {
-                guestPts = 0
-            } else {
-                guestPts = Self.pointsWrong
-            }
-        }
-
-        return (hostPts, guestPts)
-    }
-
     // MARK: - Apply Round Result
 
     private func applyRoundResult(_ result: QuestionResultPayload) {
@@ -416,7 +433,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         if isHost {
             myScore = result.hostTotalScore
             opponentScore = result.guestTotalScore
-            if result.hostCorrect { myCorrectCount += 1; coinsEarned += Self.coinPerCorrectAnswer }
+            if result.hostCorrect { myCorrectCount += 1 }
             if result.guestCorrect { opponentCorrectCount += 1 }
             myResponseTimes.append(result.hostResponseTimeMs)
             opponentResponseTimes.append(result.guestResponseTimeMs)
@@ -425,7 +442,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         } else {
             myScore = result.guestTotalScore
             opponentScore = result.hostTotalScore
-            if result.guestCorrect { myCorrectCount += 1; coinsEarned += Self.coinPerCorrectAnswer }
+            if result.guestCorrect { myCorrectCount += 1 }
             if result.hostCorrect { opponentCorrectCount += 1 }
             myResponseTimes.append(result.guestResponseTimeMs)
             opponentResponseTimes.append(result.hostResponseTimeMs)
@@ -437,6 +454,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         gameCoordinator.lastHostScore = result.hostTotalScore
         gameCoordinator.lastGuestScore = result.guestTotalScore
         gameCoordinator.questionsCompleted = currentQuestionIndex + 1
+        updateCorrectAnswerCoins(questionsCompleted: currentQuestionIndex + 1)
 
         showingRoundResult = true
         gameCoordinator.transitionToShowingResult()
@@ -475,6 +493,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private func handleGameEnd(_ payload: GameEndPayload) {
         guard !isGameOver else { return }
         isGameOver = true
+        pauseMatchDuration()
         stopTimer()
 
         let myFinal = isHost ? payload.hostFinalScore : payload.guestFinalScore
@@ -510,7 +529,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         case .none: return
         }
 
-        let duration = matchStartTime.map { Int(clock.now.timeIntervalSince($0)) } ?? 0
+        let duration = Self.clampedWholeSeconds(activeMatchDuration)
 
         analytics?.logMultiplayerMatchCompleted(
             result: resultString,
@@ -524,62 +543,77 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
     private func calculateEndOfMatchCoins(payload: GameEndPayload) {
         let questionsCompleted = currentQuestionIndex + 1
-        let isPremium = purchaseStatus?.isPremium ?? false
+        coinsEarned = MultiplayerRuleEvaluator.totalCoins(
+            correctAnswers: myCorrectCount,
+            questionsCompleted: questionsCompleted,
+            result: gameResult,
+            isPremium: purchaseStatus?.isPremium ?? false,
+            rules: rules.multiplayer.rewards
+        )
+    }
 
-        guard questionsCompleted >= 5 else {
-            return
-        }
-
-        let fullReward = questionsCompleted >= 10
-        var bonus = 0
-
-        switch gameResult {
-        case .won, .opponentDisconnected:
-            bonus = isPremium ? Self.coinWinBonusPremium : Self.coinWinBonus
-        case .lost:
-            bonus = isPremium ? Self.coinLoseBonusPremium : Self.coinLoseBonus
-        case .draw:
-            bonus = isPremium ? Self.coinDrawBonusPremium : Self.coinDrawBonus
-        case .none:
-            break
-        }
-
-        if !fullReward {
-            bonus /= 2
-        }
-
-        coinsEarned += bonus
+    private func updateCorrectAnswerCoins(questionsCompleted: Int) {
+        coinsEarned = MultiplayerRuleEvaluator.correctAnswerCoins(
+            correctAnswers: myCorrectCount,
+            questionsCompleted: questionsCompleted,
+            rules: rules.multiplayer.rewards
+        )
     }
 
     // MARK: - Timer
 
     private func startTimer() {
         timerTask?.cancel()
+        timerGeneration &+= 1
+        guard timerRemainingExactMs > 0 else {
+            timeRemainingMs = 0
+            timerActive = false
+            handleTimeout()
+            return
+        }
         timerActive = true
-        guard let startTime = questionStartTime else { return }
-        scheduleTimerTick(from: startTime)
+        questionStartTime = clock.now
+        timerSegmentStartingRemainingMs = timerRemainingExactMs
+        scheduleTimerTick(generation: timerGeneration)
     }
 
-    private func scheduleTimerTick(from startTime: Date) {
+    private func scheduleTimerTick(generation: UInt) {
         timerTask = scheduler.schedule(after: TimeInterval(Self.timerTickMs) / 1000) { [weak self] in
-            guard let self, self.timerActive else { return }
-            let elapsedMs = Int(self.clock.now.timeIntervalSince(startTime) * 1000)
-            let remaining = Self.timerDurationMs - elapsedMs
-            if remaining <= 0 {
-                self.timeRemainingMs = 0
-                self.timerActive = false
-                self.handleTimeout()
-                return
+            guard let self,
+                  self.timerActive,
+                  self.timerGeneration == generation else { return }
+            self.synchronizeTimer()
+            if self.timerActive, self.timerGeneration == generation {
+                self.scheduleTimerTick(generation: generation)
             }
-            self.timeRemainingMs = remaining
-            self.scheduleTimerTick(from: startTime)
         }
     }
 
     private func stopTimer() {
+        synchronizeTimer(allowTimeout: false)
         timerActive = false
+        timerGeneration &+= 1
         timerTask?.cancel()
         timerTask = nil
+        questionStartTime = nil
+    }
+
+    private func synchronizeTimer(allowTimeout: Bool = true) {
+        guard timerActive, let startTime = questionStartTime else { return }
+        let elapsedMs = max(0, clock.now.timeIntervalSince(startTime)) * 1_000
+        let computedRemaining = max(0, timerSegmentStartingRemainingMs - elapsedMs)
+        timerRemainingExactMs = min(timerRemainingExactMs, computedRemaining)
+        timeRemainingMs = Int(ceil(max(0, timerRemainingExactMs - Self.timerPrecisionToleranceMs)))
+
+        guard allowTimeout, timerRemainingExactMs <= Self.timerPrecisionToleranceMs else { return }
+        timerRemainingExactMs = 0
+        timeRemainingMs = 0
+        timerActive = false
+        timerGeneration &+= 1
+        timerTask?.cancel()
+        timerTask = nil
+        questionStartTime = nil
+        handleTimeout()
     }
 
     /// Centralized timer decision — timer should only run when playing and player hasn't answered.
@@ -681,18 +715,22 @@ public final class MultiplayerQuizViewModel: ObservableObject {
 
         switch state {
         case .opponentPaused:
+            pauseMatchDuration()
             stopTimer()
 
         case .reconnecting:
+            pauseMatchDuration()
             stopTimer()
 
         case .disconnected(let payload), .gameOver(let payload):
+            pauseMatchDuration()
             stopTimer()
             if !isGameOver {
                 handleGameEnd(payload)
             }
 
         case .playing:
+            resumeMatchDuration()
             evaluateTimerState(forState: state)
 
         case .waitingForConfig, .loadingRound, .waitingForOpponent, .waitingForResult, .showingResult:
@@ -711,6 +749,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         default:
             break
         }
+        pauseMatchDuration()
         gameCoordinator.sendPause()
         stopTimer()
     }
@@ -724,6 +763,7 @@ public final class MultiplayerQuizViewModel: ObservableObject {
             gameCoordinator.sendResume()
         default:
             gameCoordinator.sendResume()
+            resumeMatchDuration()
             evaluateTimerState()
         }
     }
@@ -739,10 +779,12 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     }
 
     public func showInterstitialAdIfEligible() {
+        let eligibility = rules.multiplayer.interstitialEligibility
         guard !(purchaseStatus?.isPremium ?? false),
               !(purchaseStatus?.adsRemoved ?? false),
               isAdReady(),
-              Int.random(in: 0...1, using: &randomNumberGenerator) == 0 else { return }
+              eligibility.numerator > 0,
+              Int.random(in: 0..<eligibility.denominator, using: &randomNumberGenerator) < eligibility.numerator else { return }
         showInterstitialAd()
     }
 
@@ -762,4 +804,33 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         gameCoordinator.endGame()
         cancellables.removeAll()
     }
+
+    private static func saturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {
+        let (result, overflow) = lhs.addingReportingOverflow(rhs)
+        guard overflow else { return result }
+        return rhs >= 0 ? Int.max : Int.min
+    }
+
+    private func resetMatchDuration() {
+        activeMatchDuration = 0
+        activeMatchSegmentStartTime = clock.now
+    }
+
+    private func pauseMatchDuration() {
+        guard let startTime = activeMatchSegmentStartTime else { return }
+        activeMatchDuration += max(0, clock.now.timeIntervalSince(startTime))
+        activeMatchSegmentStartTime = nil
+    }
+
+    private func resumeMatchDuration() {
+        guard activeMatchSegmentStartTime == nil else { return }
+        activeMatchSegmentStartTime = clock.now
+    }
+
+    private static func clampedWholeSeconds(_ seconds: TimeInterval) -> Int {
+        let seconds = max(0, seconds)
+        guard seconds < Double(Int.max) else { return Int.max }
+        return Int(seconds)
+    }
+
 }

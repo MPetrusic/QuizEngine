@@ -464,6 +464,13 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         powerUpCredits: [:]
     )
 
+    public static func fresh(initialCoins: Int) -> PlayerProgress {
+        var progress = PlayerProgress.default
+        progress.coins = initialCoins
+        progress.totalCoinsEarned = initialCoins
+        return progress
+    }
+
     // MARK: - Custom Codable (Backward Compatibility)
 
     /// Custom decoder that uses `decodeIfPresent` for every field added after initial release.
@@ -540,22 +547,14 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
 
     // MARK: - Date Formatting
 
-    /// Standard date formatter for daily stats keys
-    public static let dailyStatsDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-        return formatter
-    }()
-
     /// Returns the date key for today
     public static var todayKey: String {
-        dailyStatsDateFormatter.string(from: Date())
+        dateKey(for: Date(), calendar: .current)
     }
 
     /// Returns the current hour (0-23)
     public static var currentHour: Int {
-        Calendar.current.component(.hour, from: Date())
+        hour(for: Date(), calendar: .current)
     }
 
     /// Returns a stable local-calendar key for daily statistics.
@@ -568,20 +567,31 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         return formatter.string(from: date)
     }
 
+    /// Returns the local hour for an explicitly supplied date and calendar.
+    public static func hour(for date: Date, calendar: Calendar) -> Int {
+        calendar.component(.hour, from: date)
+    }
+
     // MARK: - Streak Helpers
 
     public func dailyRewardAmount() -> Int {
-        // Use the centralized streak tier definitions
-        if let tier = allStreakTiers.first(where: { $0.contains(day: currentStreak) }) {
+        dailyRewardAmount(using: allStreakTiers)
+    }
+
+    public func dailyRewardAmount(using tiers: [StreakTier]) -> Int {
+        if let tier = tiers.first(where: { $0.contains(day: currentStreak) }) {
             return tier.reward
         }
-        // Fallback to max tier reward (should never happen with proper tier definitions)
-        return allStreakTiers.last?.reward ?? 50
+        return tiers.last?.reward ?? 0
     }
 
     /// Returns the index of the current streak tier (0-based)
     public func currentStreakTierIndex() -> Int {
-        allStreakTiers.firstIndex { $0.contains(day: currentStreak) } ?? 0
+        currentStreakTierIndex(using: allStreakTiers)
+    }
+
+    public func currentStreakTierIndex(using tiers: [StreakTier]) -> Int {
+        tiers.firstIndex { $0.contains(day: currentStreak) } ?? 0
     }
 
     public func canClaimDailyReward(
@@ -591,6 +601,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         guard let lastClaimed = lastDailyRewardClaimedDate else {
             return true
         }
+        guard now >= lastClaimed else { return false }
         return !calendar.isDate(lastClaimed, inSameDayAs: now)
     }
 
@@ -606,6 +617,8 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
             lastAppOpenDate = today
             return
         }
+
+        guard today >= lastOpen else { return }
 
         if calendar.isDate(lastOpen, inSameDayAs: today) {
             // Already opened today, no change

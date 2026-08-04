@@ -26,9 +26,10 @@ Create the variant once at startup, then create one question service and inject 
 let variant = try QuizVariantDefinition(
     categories: MyQuizVariant.categories,
     achievements: MyQuizVariant.achievements,
-    questionResource: .init(bundle: .main, fileName: "my_questions")
+    questionResource: .init(bundle: .main, fileName: "my_questions"),
+    rules: MyQuizVariant.rules
 )
-let questions = QuestionDataService(resource: variant.questionResource)
+let questions = QuestionDataService(variant: variant)
 let progress = PlayerProgressManager(
     variant: variant,
     questionDataService: questions,
@@ -44,6 +45,16 @@ Power-up credits live in `PlayerProgress`, keyed by `PowerUp`; they are not app 
 Legacy inventory mapping stays app-owned. Build the complete target `PlayerProgress` with legacy hint quantities mapped to `.fiftyFifty` credits and legacy skip quantities mapped to `.skipQuestion` credits, then submit it through `PlayerProgressImportRequest`. Do not convert those quantities to coins.
 
 Do not create a second `QuestionDataService` with another file or bundle. Category totals, completion, unlocks, achievements, and sessions must refer to the same content set.
+
+Pass `variant.rules` to each `QuizViewModel` and `MultiplayerQuizViewModel`. Compatibility initializers use `.serbianCompatible`, but mixing custom view-model rules with a default progress manager produces inconsistent pricing. Treat the validated variant as the composition root for all rule consumers.
+
+## Deterministic dependencies
+
+Inject one clock/calendar pair anywhere local dates or elapsed time affect rules, and inject seeded random generators when a session must be reproducible. Solo and multiplayer view models remain `@MainActor`; immutable questions, rules, progress snapshots, messages, and deterministic generator values are `Sendable`.
+
+`QuizViewModel` owns timer decisions through its clock and scheduler. The legacy timer publisher remains source-compatible as a notification bridge, but calling `updateRemainingTimeAndHandleNavigationIfNeeded()` repeatedly for the same clock instant is idempotent. Forward scene background/foreground events to the view model so question and freeze timing pause and resume from their remaining duration.
+
+Clock rollback is conservative: elapsed values never become negative or increase a remaining timer, and future streak/reward timestamps cannot grant another reward or rewrite streak state. An injected `Calendar` and its time zone define local-day and DST boundaries.
 
 ## Serbian Quiz is a reference, not a template
 

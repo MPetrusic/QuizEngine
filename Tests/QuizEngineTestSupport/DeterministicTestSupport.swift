@@ -1,17 +1,28 @@
 import Foundation
+import os
 import QuizEngineCore
 import QuizEngineGame
 import QuizEngineMultiplayer
 
-public final class TestClock: QuizEngineClock, @unchecked Sendable {
-    public private(set) var now: Date
+public final class TestClock: QuizEngineClock {
+    private let state: OSAllocatedUnfairLock<Date>
+
+    public var now: Date {
+        state.withLock { $0 }
+    }
 
     public init(now: Date) {
-        self.now = now
+        self.state = OSAllocatedUnfairLock(initialState: now)
     }
 
     public func advance(by interval: TimeInterval) {
-        now = now.addingTimeInterval(interval)
+        state.withLock { date in
+            date = date.addingTimeInterval(interval)
+        }
+    }
+
+    public func setNow(_ date: Date) {
+        state.withLock { $0 = date }
     }
 }
 
@@ -96,7 +107,36 @@ public final class TestScheduler: QuizEngineScheduler {
     }
 }
 
-public final class TemporaryPersistence: @unchecked Sendable {
+/// Delivers a snapshot of queued operations even after cancellation to verify stale-callback guards.
+@MainActor
+public final class CancellationIgnoringTestScheduler: QuizEngineScheduler {
+    private final class ScheduledTask: QuizEngineScheduledTask {
+        func cancel() {}
+    }
+
+    private var operations: [@MainActor () -> Void] = []
+
+    public init() {}
+
+    @discardableResult
+    public func schedule(
+        after delay: TimeInterval,
+        _ operation: @escaping @MainActor () -> Void
+    ) -> any QuizEngineScheduledTask {
+        operations.append(operation)
+        return ScheduledTask()
+    }
+
+    public var pendingTaskCount: Int { operations.count }
+
+    public func runPendingBatch() {
+        let pending = operations
+        operations.removeAll()
+        pending.forEach { $0() }
+    }
+}
+
+public final class TemporaryPersistence {
     public let directoryURL: URL
     public let progressURL: URL
     public let preferencesURL: URL
@@ -258,44 +298,56 @@ public final class FakePersistenceStore: QuizEnginePersistenceStore, @unchecked 
     }
 }
 
-public final class RecordingAnalytics: AnalyticsProvider, @unchecked Sendable {
-    public private(set) var gameStarts: [(String?, GameMode)] = []
-    public private(set) var gameEnds: [(Int, Int, Int, Int)] = []
-    public private(set) var powerUps: [(PowerUp, Int)] = []
-    public private(set) var powerUpFunding: [(PowerUp, PowerUpFundingSource, Int)] = []
-    public private(set) var extraLives: [ExtraLifeMethod] = []
-    public private(set) var achievements: [(String, Int)] = []
-    public private(set) var disconnects: [(Int, String, String)] = []
+public final class RecordingAnalytics: AnalyticsProvider {
+    private struct State: Sendable {
+        var gameStarts: [(String?, GameMode)] = []
+        var gameEnds: [(Int, Int, Int, Int)] = []
+        var powerUps: [(PowerUp, Int)] = []
+        var powerUpFunding: [(PowerUp, PowerUpFundingSource, Int)] = []
+        var extraLives: [ExtraLifeMethod] = []
+        var achievements: [(String, Int)] = []
+        var disconnects: [(Int, String, String)] = []
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    public var gameStarts: [(String?, GameMode)] { state.withLock { $0.gameStarts } }
+    public var gameEnds: [(Int, Int, Int, Int)] { state.withLock { $0.gameEnds } }
+    public var powerUps: [(PowerUp, Int)] { state.withLock { $0.powerUps } }
+    public var powerUpFunding: [(PowerUp, PowerUpFundingSource, Int)] { state.withLock { $0.powerUpFunding } }
+    public var extraLives: [ExtraLifeMethod] { state.withLock { $0.extraLives } }
+    public var achievements: [(String, Int)] { state.withLock { $0.achievements } }
+    public var disconnects: [(Int, String, String)] { state.withLock { $0.disconnects } }
 
     public init() {}
 
     public func logGameStarted(category: String?, mode: GameMode) {
-        gameStarts.append((category, mode))
+        state.withLock { $0.gameStarts.append((category, mode)) }
     }
 
     public func logGameEnded(score: Int, livesRemaining: Int, questionsAnswered: Int, coinsEarned: Int, category: String?, mode: GameMode) {
-        gameEnds.append((score, livesRemaining, questionsAnswered, coinsEarned))
+        state.withLock { $0.gameEnds.append((score, livesRemaining, questionsAnswered, coinsEarned)) }
     }
 
     public func logPowerUpUsed(type: PowerUp, coinsSpent: Int) {
-        powerUps.append((type, coinsSpent))
+        state.withLock { $0.powerUps.append((type, coinsSpent)) }
     }
 
     public func logPowerUpUsed(type: PowerUp, fundingSource: PowerUpFundingSource, coinsSpent: Int) {
-        powerUpFunding.append((type, fundingSource, coinsSpent))
+        state.withLock { $0.powerUpFunding.append((type, fundingSource, coinsSpent)) }
         logPowerUpUsed(type: type, coinsSpent: coinsSpent)
     }
 
     public func logExtraLifeUsed(method: ExtraLifeMethod) {
-        extraLives.append(method)
+        state.withLock { $0.extraLives.append(method) }
     }
 
     public func logAchievementUnlocked(achievementId: String, coinReward: Int) {
-        achievements.append((achievementId, coinReward))
+        state.withLock { $0.achievements.append((achievementId, coinReward)) }
     }
 
     public func logMultiplayerDisconnect(questionsCompleted: Int, reason: String, transportType: String) {
-        disconnects.append((questionsCompleted, reason, transportType))
+        state.withLock { $0.disconnects.append((questionsCompleted, reason, transportType)) }
     }
 }
 
@@ -358,7 +410,7 @@ public final class FakePurchaseStatus: PurchaseStatusProvider {
     }
 }
 
-public final class RecordingHaptics: HapticProvider, @unchecked Sendable {
+public final class RecordingHaptics: HapticProvider {
     public private(set) var notifications: [HapticNotificationType] = []
     public private(set) var impacts: [HapticImpactStyle] = []
 

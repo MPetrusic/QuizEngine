@@ -55,6 +55,10 @@ public struct AchievementDefinition: Identifiable, Hashable, Sendable {
         copy.unlockedDate = date
         return copy
     }
+
+    public func unlock(using clock: any QuizEngineClock) -> AchievementDefinition {
+        unlock(at: clock.now)
+    }
 }
 
 public typealias Achievement = AchievementDefinition

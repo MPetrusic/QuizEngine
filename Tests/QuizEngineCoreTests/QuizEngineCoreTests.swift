@@ -29,7 +29,8 @@ final class QuizEngineCoreTests: XCTestCase {
     private func makeAlternateVariant(
         categories: [QuizCategoryDefinition]? = nil,
         achievements: [AchievementDefinition]? = nil,
-        fileName: String = "alternate_questions"
+        fileName: String = "alternate_questions",
+        rules: QuizRulesConfiguration = .serbianCompatible
     ) throws -> QuizVariantDefinition {
         try QuizVariantDefinition(
             categories: categories ?? [
@@ -38,7 +39,28 @@ final class QuizEngineCoreTests: XCTestCase {
                 .init(id: "future", displayNameKey: "category.future", iconName: "sparkles", displayOrder: 2, unlockRequirement: .categoryCompletion(categoryID: "nature", percentage: 50))
             ],
             achievements: achievements ?? achievementRules,
-            questionResource: QuestionResource(bundle: .module, fileName: fileName)
+            questionResource: QuestionResource(bundle: .module, fileName: fileName),
+            rules: rules
+        )
+    }
+
+    private func makeRules(
+        economy: QuizEconomyRules = QuizRulesConfiguration.serbianCompatible.economy,
+        solo: QuizSoloRules = QuizRulesConfiguration.serbianCompatible.solo,
+        powerUps: QuizPowerUpRules = QuizRulesConfiguration.serbianCompatible.powerUps,
+        extraLife: QuizExtraLifeRules = QuizRulesConfiguration.serbianCompatible.extraLife,
+        sessions: QuizSessionRules = QuizRulesConfiguration.serbianCompatible.sessions,
+        soloInterstitial: QuizInterstitialEligibilityRules = QuizRulesConfiguration.serbianCompatible.soloInterstitialEligibility,
+        multiplayer: QuizMultiplayerRules = QuizRulesConfiguration.serbianCompatible.multiplayer
+    ) throws -> QuizRulesConfiguration {
+        try QuizRulesConfiguration(
+            economy: economy,
+            solo: solo,
+            powerUps: powerUps,
+            extraLife: extraLife,
+            sessions: sessions,
+            soloInterstitialEligibility: soloInterstitial,
+            multiplayer: multiplayer
         )
     }
 
@@ -91,6 +113,378 @@ final class QuizEngineCoreTests: XCTestCase {
         ]
         XCTAssertThrowsError(try makeAlternateVariant(achievements: invalidAchievement))
         XCTAssertThrowsError(try makeAlternateVariant(fileName: " "))
+    }
+
+    func testSerbianCompatibleRulesSnapshotExistingBehavior() throws {
+        let rules = QuizRulesConfiguration.serbianCompatible
+
+        XCTAssertEqual(rules.economy.initialCoins, 100)
+        XCTAssertEqual(rules.economy.correctAnswerCoinReward, 1)
+        XCTAssertEqual(rules.economy.dailyRewardTiers, allStreakTiers)
+        XCTAssertEqual(rules.economy.rewardAd, QuizRewardAdRules(coinReward: 25, cooldownSeconds: 21_600))
+        XCTAssertEqual(rules.solo.timerDurationSeconds, 15)
+        XCTAssertEqual(rules.solo.startingLives, 3)
+        XCTAssertEqual(rules.solo.scoring, QuizScoringRules(baseCorrectPoints: 10, streakCorrectPoints: 20, streakThreshold: 5))
+        XCTAssertEqual(rules.powerUps.rule(for: .fiftyFifty)?.coinCost, PowerUp.fiftyFifty.cost)
+        XCTAssertEqual(rules.powerUps.rule(for: .skipQuestion)?.coinCost, PowerUp.skipQuestion.cost)
+        XCTAssertEqual(rules.powerUps.rule(for: .timeFreeze)?.coinCost, PowerUp.timeFreeze.cost)
+        XCTAssertEqual(rules.powerUps.rule(for: .streakShield)?.coinCost, PowerUp.streakShield.cost)
+        XCTAssertEqual(rules.extraLife, QuizExtraLifeRules(coinCost: 50, maximumUsesPerSession: 1, allowsCoins: true, allowsRewardedAd: true))
+        XCTAssertNil(rules.sessions.competitiveQuestionLimit)
+        XCTAssertNil(rules.sessions.categoryQuestionLimit)
+        XCTAssertEqual(rules.sessions.practiceQuestionCount, 20)
+        XCTAssertEqual(rules.sessions.practiceUnansweredRatio, 0.8)
+        XCTAssertEqual(rules.sessions.multiplayerQuestionCount, 15)
+        XCTAssertEqual(rules.soloInterstitialEligibility, QuizInterstitialEligibilityRules(numerator: 2, denominator: 5))
+        XCTAssertEqual(rules.multiplayer.timerDurationMilliseconds, 10_000)
+        XCTAssertEqual(rules.multiplayer.tieThresholdMilliseconds, 10)
+        XCTAssertEqual(rules.multiplayer.rewards.minimumQuestionsForAnyReward, 0)
+        XCTAssertEqual(rules.multiplayer.rewards.minimumQuestionsForOutcomeBonus, 5)
+        XCTAssertEqual(rules.multiplayer.rewards.questionsForFullOutcomeBonus, 10)
+        XCTAssertEqual(rules.multiplayer.rewards.partialRewardDivisor, 2)
+
+        let legacyVariant = try QuizVariantDefinition(
+            categories: [],
+            achievements: [],
+            questionResource: QuestionResource(bundle: .module, fileName: "alternate_questions")
+        )
+        XCTAssertEqual(legacyVariant.rules, rules)
+    }
+
+    func testRulesValidationRejectsInvalidDomainValues() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible
+
+        XCTAssertThrowsError(
+            try makeRules(
+                economy: QuizEconomyRules(
+                    initialCoins: -1,
+                    correctAnswerCoinReward: defaults.economy.correctAnswerCoinReward,
+                    dailyRewardTiers: defaults.economy.dailyRewardTiers,
+                    rewardAd: defaults.economy.rewardAd
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .negativeValue("economy.initialCoins"))
+        }
+
+        var incompletePowerUps = defaults.powerUps.rules
+        incompletePowerUps.removeValue(forKey: .skipQuestion)
+        XCTAssertThrowsError(
+            try makeRules(
+                powerUps: QuizPowerUpRules(
+                    rules: incompletePowerUps,
+                    fiftyFiftyIncorrectAnswersRemoved: 2,
+                    timeFreezeDurationSeconds: 10,
+                    streakShieldMinimumStreak: 5
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .missingPowerUpRule(.skipQuestion))
+        }
+
+        XCTAssertThrowsError(
+            try makeRules(
+                economy: QuizEconomyRules(
+                    initialCoins: 100,
+                    correctAnswerCoinReward: 1,
+                    dailyRewardTiers: [
+                        StreakTier(id: 0, dayRange: 0...1, reward: 10, label: "1"),
+                        StreakTier(id: 1, dayRange: 3...Int.max, reward: 20, label: "3+")
+                    ],
+                    rewardAd: defaults.economy.rewardAd
+                )
+            )
+        ) { error in
+            guard case .invalidDailyRewardTiers = error as? QuizRulesValidationError else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertThrowsError(
+            try makeRules(soloInterstitial: QuizInterstitialEligibilityRules(numerator: 2, denominator: 1))
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidProbability("soloInterstitialEligibility"))
+        }
+
+        XCTAssertThrowsError(
+            try makeRules(
+                sessions: QuizSessionRules(
+                    competitiveQuestionLimit: 0,
+                    categoryQuestionLimit: nil,
+                    practiceQuestionCount: 20,
+                    practiceUnansweredRatio: 0.8,
+                    multiplayerQuestionCount: 15
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidSessionLimit("sessions.competitiveQuestionLimit"))
+        }
+
+        let invalidRewards = QuizMultiplayerRewardRules(
+            correctAnswerCoins: 1,
+            standardOutcomeRewards: defaults.multiplayer.rewards.standardOutcomeRewards,
+            premiumOutcomeRewards: defaults.multiplayer.rewards.premiumOutcomeRewards,
+            minimumQuestionsForAnyReward: 6,
+            minimumQuestionsForOutcomeBonus: 5,
+            questionsForFullOutcomeBonus: 10,
+            partialRewardDivisor: 2
+        )
+        XCTAssertThrowsError(
+            try makeRules(
+                multiplayer: QuizMultiplayerRules(
+                    timerDurationMilliseconds: 10_000,
+                    tieThresholdMilliseconds: 10,
+                    scoring: defaults.multiplayer.scoring,
+                    rewards: invalidRewards,
+                    interstitialEligibility: defaults.multiplayer.interstitialEligibility
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidMultiplayerThresholds)
+        }
+    }
+
+    func testRulesValidationRejectsInvalidDurationsEligibilitySizesAndThresholds() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible
+
+        XCTAssertThrowsError(
+            try makeRules(
+                economy: QuizEconomyRules(
+                    initialCoins: 100,
+                    correctAnswerCoinReward: 1,
+                    dailyRewardTiers: allStreakTiers,
+                    rewardAd: QuizRewardAdRules(coinReward: 25, cooldownSeconds: 0)
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .nonPositiveValue("economy.rewardAd.cooldownSeconds"))
+        }
+
+        var emptyEligibility = defaults.powerUps.rules
+        emptyEligibility[.fiftyFifty] = QuizPowerUpRule(
+            coinCost: 35,
+            allowedModes: [],
+            maximumUsesPerSession: 1
+        )
+        XCTAssertThrowsError(
+            try makeRules(
+                powerUps: QuizPowerUpRules(
+                    rules: emptyEligibility,
+                    fiftyFiftyIncorrectAnswersRemoved: 2,
+                    timeFreezeDurationSeconds: 10,
+                    streakShieldMinimumStreak: 5
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidPowerUpEligibility(.fiftyFifty))
+        }
+
+        XCTAssertThrowsError(
+            try makeRules(
+                extraLife: QuizExtraLifeRules(
+                    coinCost: 0,
+                    maximumUsesPerSession: 1,
+                    allowsCoins: false,
+                    allowsRewardedAd: false
+                )
+            )
+        )
+
+        XCTAssertThrowsError(
+            try makeRules(
+                sessions: QuizSessionRules(
+                    competitiveQuestionLimit: nil,
+                    categoryQuestionLimit: nil,
+                    practiceQuestionCount: 20,
+                    practiceUnansweredRatio: 1.01,
+                    multiplayerQuestionCount: 15
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidSessionLimit("sessions.practiceUnansweredRatio"))
+        }
+
+        XCTAssertThrowsError(
+            try makeRules(
+                multiplayer: QuizMultiplayerRules(
+                    timerDurationMilliseconds: 100,
+                    tieThresholdMilliseconds: 101,
+                    scoring: defaults.multiplayer.scoring,
+                    rewards: defaults.multiplayer.rewards,
+                    interstitialEligibility: defaults.multiplayer.interstitialEligibility
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? QuizRulesValidationError, .invalidMultiplayerThresholds)
+        }
+    }
+
+    func testCustomRulesDriveFreshEconomyCooldownAndSessionSelection() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible
+        let twoQuestionMultiplayer = QuizMultiplayerRules(
+            timerDurationMilliseconds: defaults.multiplayer.timerDurationMilliseconds,
+            tieThresholdMilliseconds: defaults.multiplayer.tieThresholdMilliseconds,
+            scoring: defaults.multiplayer.scoring,
+            rewards: QuizMultiplayerRewardRules(
+                correctAnswerCoins: defaults.multiplayer.rewards.correctAnswerCoins,
+                standardOutcomeRewards: defaults.multiplayer.rewards.standardOutcomeRewards,
+                premiumOutcomeRewards: defaults.multiplayer.rewards.premiumOutcomeRewards,
+                minimumQuestionsForAnyReward: 0,
+                minimumQuestionsForOutcomeBonus: 1,
+                questionsForFullOutcomeBonus: 2,
+                partialRewardDivisor: defaults.multiplayer.rewards.partialRewardDivisor
+            ),
+            interstitialEligibility: defaults.multiplayer.interstitialEligibility
+        )
+        let customRules = try makeRules(
+            economy: QuizEconomyRules(
+                initialCoins: 250,
+                correctAnswerCoinReward: 4,
+                dailyRewardTiers: [StreakTier(id: 0, dayRange: 0...Int.max, reward: 7, label: "all")],
+                rewardAd: QuizRewardAdRules(coinReward: 9, cooldownSeconds: 30)
+            ),
+            powerUps: QuizPowerUpRules(
+                rules: defaults.powerUps.rules.merging([
+                    .timeFreeze: QuizPowerUpRule(
+                        coinCost: 11,
+                        allowedModes: [.singlePlayer, .practice],
+                        maximumUsesPerSession: 1
+                    )
+                ]) { _, replacement in replacement },
+                fiftyFiftyIncorrectAnswersRemoved: 2,
+                timeFreezeDurationSeconds: 10,
+                streakShieldMinimumStreak: 5
+            ),
+            sessions: QuizSessionRules(
+                competitiveQuestionLimit: 2,
+                categoryQuestionLimit: 1,
+                practiceQuestionCount: 2,
+                practiceUnansweredRatio: 1,
+                multiplayerQuestionCount: 2
+            ),
+            multiplayer: twoQuestionMultiplayer
+        )
+        let variant = try makeAlternateVariant(rules: customRules)
+        let questionService = QuestionDataService(
+            variant: variant,
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 90)
+        )
+        let clock = TestClock(now: Date(timeIntervalSinceReferenceDate: 1_000))
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: questionService,
+            persistenceStore: FakePersistenceStore(),
+            clock: clock,
+            calendar: utcCalendar
+        )
+
+        XCTAssertEqual(manager.coins, 250)
+        XCTAssertEqual(manager.dailyRewardAmount, 7)
+        XCTAssertEqual(manager.powerUpCost(for: .timeFreeze), 11)
+        XCTAssertEqual(manager.consumePowerUp(.timeFreeze)?.coinsSpent, 11)
+        XCTAssertEqual(try questionService.getQuestionsForCompetitiveMode().count, 2)
+        XCTAssertEqual(try questionService.getQuestionsForCategoryMode(category: "nature").count, 1)
+        XCTAssertEqual(
+            try questionService.getQuestionsForPracticeMode(category: nil, correctlyAnsweredIDs: []).questions.count,
+            2
+        )
+        XCTAssertEqual(try questionService.getQuestionsForMultiplayerMatch().count, 2)
+
+        manager.recordRewardAdWatched()
+        XCTAssertEqual(manager.coins, 248)
+        XCTAssertFalse(manager.canWatchRewardAd())
+        XCTAssertEqual(manager.timeUntilNextRewardAd(), 30)
+        clock.advance(by: 30)
+        XCTAssertTrue(manager.canWatchRewardAd())
+    }
+
+    func testConfiguredPracticeSelectionHandlesMaximumSessionSizeWithoutOverflow() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible
+        let rules = try makeRules(
+            sessions: QuizSessionRules(
+                competitiveQuestionLimit: nil,
+                categoryQuestionLimit: nil,
+                practiceQuestionCount: Int.max,
+                practiceUnansweredRatio: 1,
+                multiplayerQuestionCount: defaults.sessions.multiplayerQuestionCount
+            )
+        )
+        let service = QuestionDataService(
+            resource: QuestionResource(bundle: .module, fileName: "alternate_questions"),
+            rules: rules,
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 91)
+        )
+
+        let result = try service.getQuestionsForPracticeMode(
+            category: nil,
+            correctlyAnsweredIDs: []
+        )
+
+        XCTAssertEqual(result.questions.count, 3)
+        XCTAssertEqual(result.totalInCategory, 3)
+        XCTAssertEqual(result.correctlyAnsweredCount, 0)
+    }
+
+    func testLegacyMissingCoinFieldKeepsOneHundredDespiteCustomFreshBalance() throws {
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["lifetimeGamesPlayed": 3],
+            format: .binary,
+            options: 0
+        )
+        let customRules = try makeRules(
+            economy: QuizEconomyRules(
+                initialCoins: 999,
+                correctAnswerCoinReward: 1,
+                dailyRewardTiers: allStreakTiers,
+                rewardAd: QuizRewardAdRules(coinReward: 25, cooldownSeconds: 21_600)
+            )
+        )
+        let variant = try makeAlternateVariant(rules: customRules)
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: FakePersistenceStore(primaryData: data)
+        )
+
+        XCTAssertEqual(manager.coins, 100)
+        XCTAssertEqual(manager.progress.totalCoinsEarned, 100)
+        XCTAssertEqual(manager.progress.lifetimeGamesPlayed, 3)
+    }
+
+    func testConfiguredRewardsDoNotOverflowPersistedBalances() throws {
+        let defaults = QuizRulesConfiguration.serbianCompatible
+        let rules = try makeRules(
+            economy: QuizEconomyRules(
+                initialCoins: Int.max,
+                correctAnswerCoinReward: 1,
+                dailyRewardTiers: [StreakTier(id: 0, dayRange: 0...Int.max, reward: 1, label: "all")],
+                rewardAd: defaults.economy.rewardAd
+            )
+        )
+        let variant = try makeAlternateVariant(rules: rules)
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: FakePersistenceStore(),
+            clock: TestClock(now: Date(timeIntervalSinceReferenceDate: 1_000)),
+            calendar: utcCalendar
+        )
+
+        XCTAssertNil(manager.claimDailyReward())
+        manager.recordMultiplayerResult(
+            won: true,
+            draw: false,
+            score: 10,
+            questionsCompleted: 1,
+            questionsCorrect: 1,
+            coinsEarned: 1,
+            responseTimes: [100]
+        )
+
+        XCTAssertEqual(manager.coins, Int.max)
+        XCTAssertEqual(manager.progress.totalCoinsEarned, Int.max)
+        XCTAssertEqual(manager.progress.multiplayerGamesPlayed, 0)
+        XCTAssertNil(manager.progress.lastDailyRewardClaimedDate)
     }
 
     func testEveryAchievementRuleUnlocksAtExactAndAboveThresholdAndReportsProgress() throws {
@@ -313,6 +707,139 @@ final class QuizEngineCoreTests: XCTestCase {
         XCTAssertEqual(
             try first.getQuestionsForCompetitiveMode().map(\.id),
             try second.getQuestionsForCompetitiveMode().map(\.id)
+        )
+    }
+
+    func testIdenticalSeedsProduceIdenticalSelectionAcrossEverySessionBuilder() throws {
+        let first = QuestionDataService(
+            bundle: .module,
+            fileName: "alternate_questions",
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 4_242)
+        )
+        let second = QuestionDataService(
+            bundle: .module,
+            fileName: "alternate_questions",
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 4_242)
+        )
+
+        XCTAssertEqual(
+            try first.getQuestionsForCompetitiveMode().map(\.id),
+            try second.getQuestionsForCompetitiveMode().map(\.id)
+        )
+        XCTAssertEqual(
+            try first.getQuestionsForCategoryMode(category: "nature").map(\.id),
+            try second.getQuestionsForCategoryMode(category: "nature").map(\.id)
+        )
+        XCTAssertEqual(
+            try first.getQuestionsForPracticeMode(
+                category: nil,
+                correctlyAnsweredIDs: [1]
+            ).questions.map(\.id),
+            try second.getQuestionsForPracticeMode(
+                category: nil,
+                correctlyAnsweredIDs: [1]
+            ).questions.map(\.id)
+        )
+        XCTAssertEqual(
+            try first.getQuestionsForMultiplayerMatch(count: 2).map(\.id),
+            try second.getQuestionsForMultiplayerMatch(count: 2).map(\.id)
+        )
+    }
+
+    func testClockRollbackCannotAdvanceCalendarRulesOrCooldowns() throws {
+        let calendar = utcCalendar
+        let initialDate = calendar.date(
+            from: DateComponents(year: 2026, month: 8, day: 4, hour: 12)
+        )!
+        let clock = TestClock(now: initialDate)
+        let variant = try makeAlternateVariant()
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: FakePersistenceStore(),
+            clock: clock,
+            calendar: calendar
+        )
+
+        manager.handleAppOpen()
+        manager.updatePlayStreak()
+        XCTAssertNotNil(manager.claimDailyReward())
+        manager.recordRewardAdWatched()
+        let coinsAfterRewards = manager.coins
+
+        clock.setNow(initialDate.addingTimeInterval(-86_400))
+        manager.handleAppOpen()
+        manager.updatePlayStreak()
+
+        XCTAssertEqual(manager.currentStreak, 1)
+        XCTAssertEqual(manager.progress.currentPlayStreak, 1)
+        XCTAssertNil(manager.claimDailyReward())
+        XCTAssertFalse(manager.canWatchRewardAd())
+        XCTAssertEqual(
+            manager.timeUntilNextRewardAd(),
+            variant.rules.economy.rewardAd.cooldownSeconds
+        )
+        XCTAssertEqual(manager.coins, coinsAfterRewards)
+    }
+
+    func testCalendarDayRulesCrossSpringAndFallDSTWithoutElapsedDayAssumptions() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let variant = try makeAlternateVariant()
+
+        for (start, next) in [
+            (
+                DateComponents(year: 2026, month: 3, day: 7, hour: 12),
+                DateComponents(year: 2026, month: 3, day: 8, hour: 12)
+            ),
+            (
+                DateComponents(year: 2026, month: 10, day: 31, hour: 12),
+                DateComponents(year: 2026, month: 11, day: 1, hour: 12)
+            )
+        ] {
+            let clock = TestClock(now: calendar.date(from: start)!)
+            let manager = try PlayerProgressManager(
+                variant: variant,
+                questionDataService: QuestionDataService(variant: variant),
+                persistenceStore: FakePersistenceStore(),
+                clock: clock,
+                calendar: calendar
+            )
+            manager.handleAppOpen()
+            manager.updatePlayStreak()
+            XCTAssertNotNil(manager.claimDailyReward())
+
+            clock.setNow(calendar.date(from: next)!)
+            manager.handleAppOpen()
+            manager.updatePlayStreak()
+
+            XCTAssertEqual(manager.currentStreak, 2)
+            XCTAssertEqual(manager.progress.currentPlayStreak, 2)
+            XCTAssertNotNil(manager.claimDailyReward())
+        }
+    }
+
+    func testInjectedCalendarAndTimeZoneDriveStatisticsAndAchievements() throws {
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let date = tokyo.date(
+            from: DateComponents(year: 2026, month: 8, day: 5, hour: 2)
+        )!
+        let clock = TestClock(now: date)
+        let variant = try makeAlternateVariant()
+        let achievementService = AchievementService(
+            variant: variant,
+            clock: clock,
+            calendar: tokyo
+        )
+        let session = PlayerProgressManager.SessionStatistics(clock: clock, calendar: tokyo)
+
+        XCTAssertEqual(PlayerProgress.dateKey(for: date, calendar: tokyo), "2026-08-05")
+        XCTAssertEqual(PlayerProgress.hour(for: date, calendar: tokyo), 2)
+        XCTAssertEqual(session.sessionHour, 2)
+        XCTAssertTrue(
+            achievementService.checkAchievements(progress: .default)
+                .contains(where: { $0.id == "night" })
         )
     }
 
@@ -826,6 +1353,7 @@ final class QuizEngineCoreTests: XCTestCase {
 
         XCTAssertFalse(spendingManager.canFundPowerUp(.timeFreeze))
         XCTAssertNil(spendingManager.consumePowerUp(.timeFreeze))
+        XCTAssertFalse(spendingManager.spendCoins(1))
         XCTAssertEqual(spendingManager.coins, 100)
         XCTAssertEqual(spendingManager.progress.totalCoinsSpent, Int.max)
         XCTAssertNil(spendingManager.progress.lifetimePowerUpsUsed)

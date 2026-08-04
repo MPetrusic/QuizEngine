@@ -34,10 +34,12 @@ Persistence is owned by `QuizEngineCore`. New writes use a versioned schema-1 en
 
 `PlayerProgress` also persists free credits independently for every `PowerUp`. `PlayerProgressManager.consumePowerUp(_:)` uses a free credit before the existing coin cost, records usage in the same durable transaction, and returns a `PowerUpSpendResult` for UI and analytics. A failed write rolls back the credit or coin deduction and the usage counters.
 
+Reusable gameplay and economy policy is owned by the variant through a validated `QuizRulesConfiguration`. `.serbianCompatible` preserves released defaults; another app can select different timers, scoring, session sizes, costs, rewards, ad-eligibility inputs, and multiplayer thresholds without forking engine code.
+
 ## Required composition
 
-1. Create one validated `QuizVariantDefinition` with your categories, achievements, and explicit `QuestionResource`.
-2. Create exactly one `QuestionDataService` from that resource.
+1. Create one validated `QuizVariantDefinition` with your categories, achievements, explicit `QuestionResource`, and rules.
+2. Create exactly one `QuestionDataService` from that variant.
 3. Pass that same service and variant to `PlayerProgressManager`; build game sessions from the same service.
 4. Keep category IDs, achievement IDs, and question IDs stable after release.
 5. Add app-owned adapters only for integrations your app actually uses.
@@ -46,6 +48,7 @@ Persistence is owned by `QuizEngineCore`. New writes use a versioned schema-1 en
 
 - [Architecture and product selection](Docs/architecture.md)
 - [Variant definitions and content](Docs/variant-and-content.md)
+- [Rules and economy configuration](Docs/rules-and-economy.md)
 - [Question JSON](Docs/question-json.md)
 - [Providers and vendor integrations](Docs/providers-and-integrations.md)
 - [Optional multiplayer](Docs/multiplayer.md)
@@ -68,7 +71,9 @@ QuizEngine keeps production defaults for consumers, but its time, calendar, rand
 
 - `QuizEngineClock` and an explicit `Calendar` control date, time-zone, streak, cooldown, and statistics behavior.
 - `RandomNumberGenerator` injection controls question, answer, seed, and ad-selection randomness.
-- `QuizEngineScheduler` controls delayed game and multiplayer work. Tests can manually advance a scheduler instead of sleeping.
+- `QuizEngineScheduler` controls delayed game and multiplayer work, including rule-owned timer ticks. Tests advance a clock and scheduler instead of sleeping.
+- Solo and multiplayer timers clamp clock rollback, and lifecycle pause/resume preserves remaining time without counting background duration.
+- Calendar-day rewards and streaks use the injected calendar and reject timestamps that move backward.
 - `PlayerProgressManager` and `UserPreferencesLoader` accept injected persistence stores and temporary persistence URLs for isolated tests.
 - Existing provider protocols accept fake analytics, ads, purchases, haptics, leaderboards, and transports.
 - Power-up tests can grant credits through the manager and assert the returned funding source without app services.

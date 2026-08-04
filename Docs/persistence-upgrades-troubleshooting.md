@@ -14,6 +14,10 @@ Renaming an ID, deleting a category that appears in saved progress, or reusing a
 
 QuizEngine has no automated historical installed-user save fixture yet. A consumer app must add one before changing its own persistence contract.
 
+For a genuinely fresh player with no primary progress document, `PlayerProgressManager` uses `variant.rules.economy.initialCoins`. Legacy/schema documents whose older payload omits `coins` or `totalCoinsEarned` continue to decode those fields as 100. Changing a variant's fresh balance never rewrites or reinterprets an existing player's stored balance.
+
+Daily rewards, app/play streaks, reward-ad cooldowns, achievements, and daily/hourly statistics use the manager's injected clock and calendar. A clock earlier than a stored streak, claim, play, or cooldown timestamp cannot advance or reset that rule. Local-day and DST behavior is defined by the injected calendar and time zone.
+
 ## Failure and recovery contract
 
 The default file store uses these sibling paths:

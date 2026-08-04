@@ -78,6 +78,7 @@ struct StarterQuizRootView: View {
 }
 
 private struct StarterGameView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var game: QuizViewModel
     let exit: () -> Void
 
@@ -111,13 +112,22 @@ private struct StarterGameView: View {
                     Spacer()
                 }
                 .padding()
-                .onReceive(game.timer) { _ in
-                    game.updateRemainingTimeAndHandleNavigationIfNeeded()
-                }
             } else {
                 ProgressView()
             }
         }
         .navigationTitle("Quiz")
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                game.handleAppBackgrounded()
+            case .active:
+                game.handleAppForegrounded()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
     }
 }

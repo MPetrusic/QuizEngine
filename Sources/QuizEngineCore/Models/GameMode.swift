@@ -1,6 +1,6 @@
 import Foundation
 
-public enum GameMode: Sendable {
+public enum GameMode: Hashable, Sendable {
     case singlePlayer
     case practice
 }
