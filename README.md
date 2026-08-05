@@ -67,6 +67,7 @@ The package validates positive unique IDs, declared categories, four non-empty d
 - [Persistence, upgrades, and troubleshooting](Docs/persistence-upgrades-troubleshooting.md)
 - [Deterministic testing](Docs/testing.md)
 - [Release checklist](Docs/release-checklist.md)
+- [v0.2.0 release validation and migration handoff](Docs/v0.2.0-release-validation-and-migration-handoff.md)
 
 ## Verification
 

@@ -6,7 +6,8 @@
       "answers": [
         { "text": "Mars", "correct": true },
         { "text": "Venus", "correct": false },
-        { "text": "Jupiter", "correct": false }
+        { "text": "Jupiter", "correct": false },
+        { "text": "Saturn", "correct": false }
       ],
       "categories": ["space"],
       "difficulty": 1,
@@ -18,7 +19,8 @@
       "answers": [
         { "text": "The Moon", "correct": true },
         { "text": "Europa", "correct": false },
-        { "text": "Titan", "correct": false }
+        { "text": "Titan", "correct": false },
+        { "text": "Phobos", "correct": false }
       ],
       "categories": ["space"],
       "difficulty": 1
@@ -29,7 +31,8 @@
       "answers": [
         { "text": "Mercury", "correct": true },
         { "text": "Earth", "correct": false },
-        { "text": "Mars", "correct": false }
+        { "text": "Mars", "correct": false },
+        { "text": "Venus", "correct": false }
       ],
       "categories": ["space"],
       "difficulty": 2
@@ -40,7 +43,8 @@
       "answers": [
         { "text": "Photosynthesis", "correct": true },
         { "text": "Respiration", "correct": false },
-        { "text": "Fermentation", "correct": false }
+        { "text": "Fermentation", "correct": false },
+        { "text": "Transpiration", "correct": false }
       ],
       "categories": ["nature"],
       "difficulty": 1
@@ -51,7 +55,8 @@
       "answers": [
         { "text": "Blue whale", "correct": true },
         { "text": "African elephant", "correct": false },
-        { "text": "Giraffe", "correct": false }
+        { "text": "Giraffe", "correct": false },
+        { "text": "Hippopotamus", "correct": false }
       ],
       "categories": ["nature"],
       "difficulty": 1
