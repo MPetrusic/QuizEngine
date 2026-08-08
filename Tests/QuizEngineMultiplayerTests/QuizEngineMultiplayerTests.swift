@@ -589,14 +589,15 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         let recorded = ProgressSnapshot(first.manager.progress)
 
         let conflictingAnalytics = RecordingAnalytics()
+        // Same match ID and same final scores, but a terminal record whose canonical fingerprint
+        // differs because the round resolved with a different response time.
         let conflicting = try await makeTerminalHarness(
             store: store,
             analytics: conflictingAnalytics,
             matchID: matchID,
-            hostScore: -5,
-            guestScore: 11
+            guestResponseTimeMs: 160
         )
-        await deliverTerminal(to: conflicting, hostScore: -5, guestScore: 11)
+        await deliverTerminal(to: conflicting)
 
         XCTAssertEqual(ProgressSnapshot(conflicting.manager.progress), recorded)
         XCTAssertEqual(conflicting.manager.progress.multiplayerMatchReceipts.count, 1)
@@ -686,95 +687,1019 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         XCTAssertEqual(transport.sentRawPayloads.count, 1)
     }
 
-    func testHardenedHandshakeRejectsContentMismatchAndMalformedPayloadOnce() async throws {
-        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
-        let transport = FakeTransport()
-        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
-        let configuration = try hardenedConfiguration(contentVersion: "content-a")
-        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: UUID(), sequence: 0,
-            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-b", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
-        )), from: opponent)
-        await drainTransportEvents()
-        XCTAssertEqual(coordinator.terminalFailure, .contentMismatch)
-        let terminal = coordinator.gameEndResult
-        transport.emitRaw(Data(repeating: 0, count: MultiplayerWireCodec.maximumPayloadBytes + 1), from: opponent)
-        await drainTransportEvents()
-        XCTAssertEqual(coordinator.gameEndResult, terminal)
-    }
-
     func testHardenedPayloadReplayAndFutureRoundAreHarmless() async throws {
-        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
-        let transport = FakeTransport()
-        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
-        let configuration = try hardenedConfiguration(contentVersion: "content-a")
-        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
-        let matchID = UUID()
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 0,
-            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-a", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
-        )), from: opponent)
+        let session = try await hardenedGuestSession()
+        let config = canonicalGameConfig()
+        let valid = MultiplayerWireEnvelope(
+            matchID: session.matchID,
+            sequence: 1,
+            payload: .gameConfig(.init(config))
+        )
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: session.opponent)
         await drainTransportEvents()
 
-        let config = GameConfigPayload(questions: [
-            Question(id: 10, question: "Q", answers: [Answer(text: "A", correct: true), Answer(text: "B", correct: false)], categories: ["alpha"])
-        ], seed: 1)
-        let messageID = UUID()
-        let valid = MultiplayerWireEnvelope(matchID: matchID, sequence: 1, messageID: messageID, payload: .gameConfig(.init(config)))
-        transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: opponent)
+        // A replayed envelope, a future round index, and a terminal payload that contradicts the
+        // committed scores must all be harmless.
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: session.opponent)
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: session.matchID, sequence: 3, payload: .playerReady(roundIndex: 99)
+        )), from: session.opponent)
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: session.matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
+        )), from: session.opponent)
         await drainTransportEvents()
-        transport.emitRaw(try MultiplayerWireCodec.encode(valid), from: opponent)
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 3, payload: .playerReady(roundIndex: 99)
-        )), from: opponent)
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
-        )), from: opponent)
-        await drainTransportEvents()
-        coordinator.questionsCompleted = 1
-        coordinator.lastHostScore = 10
-        coordinator.lastGuestScore = 5
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 4,
+
+        session.coordinator.questionsCompleted = 1
+        session.coordinator.lastHostScore = 10
+        session.coordinator.lastGuestScore = 5
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: session.matchID, sequence: 4,
             payload: .gameEnd(.init(hostFinalScore: 999, guestFinalScore: 5, reason: .completed))
-        )), from: opponent)
-        await drainTransportEvents()
-
-        XCTAssertEqual(coordinator.receivedGameConfig, config)
-        XCTAssertTrue(coordinator.opponentReady)
-        XCTAssertNil(coordinator.terminalFailure)
-        XCTAssertNil(coordinator.gameEndResult)
-
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+        )), from: session.opponent)
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(.init(
             matchID: UUID(), sequence: 5, payload: .pause
-        )), from: opponent)
+        )), from: session.opponent)
         await drainTransportEvents()
-        XCTAssertNil(coordinator.terminalFailure)
+
+        XCTAssertEqual(session.coordinator.receivedGameConfig, config)
+        XCTAssertTrue(session.coordinator.opponentReady)
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertNil(session.coordinator.gameEndResult)
     }
 
-    func testHardenedGameConfigurationRejectsUnplayableFields() async throws {
-        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
-        let transport = FakeTransport()
-        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
-        let configuration = try hardenedConfiguration(contentVersion: "content-a")
-        coordinator.startGame(transport: transport, opponent: opponent, role: .guest, matchConfiguration: configuration)
-        let matchID = UUID()
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 0,
-            payload: .hello(.init(protocolVersion: 1, contentVersion: "content-a", capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities))
-        )), from: opponent)
+    // MARK: - QEB-02 protocol negotiation
+
+    func testHardenedHandshakeRejectsProtocolVersionMismatch() async throws {
+        let session = try await hardenedGuestSession(negotiates: false)
+        session.transport.emitRaw(try handshakeData(
+            matchID: session.matchID,
+            protocolVersion: MultiplayerMatchConfiguration.protocolVersion + 1
+        ), from: session.opponent)
         await drainTransportEvents()
 
-        let invalid = GameConfigPayload(questions: [
-            Question(id: 10, question: "", answers: [Answer(text: "A", correct: true), Answer(text: "B", correct: false)], categories: [])
-        ], seed: 1)
-        transport.emitRaw(try MultiplayerWireCodec.encode(.init(
-            matchID: matchID, sequence: 1, payload: .gameConfig(.init(invalid))
-        )), from: opponent)
+        XCTAssertEqual(session.coordinator.terminalFailure, .protocolMismatch)
+        XCTAssertEqual(session.coordinator.handshakeStatus, .rejected(.protocolMismatch))
+        XCTAssertFalse(session.coordinator.handshakeAccepted)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedHandshakeRejectsContentVersionMismatch() async throws {
+        let session = try await hardenedGuestSession(negotiates: false)
+        session.transport.emitRaw(try handshakeData(
+            matchID: session.matchID,
+            contentVersion: "content-b"
+        ), from: session.opponent)
         await drainTransportEvents()
 
-        XCTAssertEqual(coordinator.terminalFailure, .malformedPayload)
+        XCTAssertEqual(session.coordinator.terminalFailure, .contentMismatch)
+        XCTAssertFalse(session.coordinator.handshakeAccepted)
+    }
+
+    func testHardenedHandshakeRejectsMissingCapability() async throws {
+        let session = try await hardenedGuestSession(negotiates: false)
+        var capabilities = MultiplayerMatchConfiguration.requiredQE6Capabilities
+        capabilities.remove(.idempotentTerminalReceiptV1)
+        session.transport.emitRaw(try handshakeData(
+            matchID: session.matchID,
+            capabilities: capabilities
+        ), from: session.opponent)
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .capabilityMismatch)
+        XCTAssertFalse(session.coordinator.handshakeAccepted)
+    }
+
+    func testHardenedActiveMatchRejectsEmptyPayload() async throws {
+        let session = try await hardenedGuestSession()
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+
+        session.transport.emitRaw(Data(), from: session.opponent)
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .malformedPayload)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedActiveMatchRejectsOversizedPayload() async throws {
+        let session = try await hardenedGuestSession()
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+
+        session.transport.emitRaw(
+            Data(repeating: 0, count: MultiplayerWireCodec.maximumPayloadBytes + 1),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .malformedPayload)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedTerminalFailureIsNotReplacedByLaterMalformedPayload() async throws {
+        let session = try await hardenedGuestSession(negotiates: false)
+        session.transport.emitRaw(
+            try handshakeData(matchID: session.matchID, contentVersion: "content-b"),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        let terminal = session.coordinator.gameEndResult
+
+        session.transport.emitRaw(
+            Data(repeating: 0, count: MultiplayerWireCodec.maximumPayloadBytes + 1),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .contentMismatch)
+        XCTAssertEqual(session.coordinator.gameEndResult, terminal)
+    }
+
+    func testHardenedInvalidSenderIsIgnoredWhileMatchIsActive() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID,
+                sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: MultiplayerPlayer(id: "attacker", displayName: "Attacker")
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.receivedGameConfig)
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedWrongMatchIDIsIgnored() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: UUID(),
+                sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.receivedGameConfig)
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedDuplicateMessageIDIsIgnored() async throws {
+        let session = try await hardenedGuestSession()
+        let messageID = UUID()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1, messageID: messageID,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        // The same message ID at a later sequence must not be processed again.
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, messageID: messageID,
+                payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertFalse(session.coordinator.opponentReady)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedDuplicateSequenceIsIgnored() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        // A different message at an already committed sequence is ignored.
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1, payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertFalse(session.coordinator.opponentReady)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedFutureSequenceIsBufferedUntilTheMissingSequenceArrives() async throws {
+        let session = try await hardenedGuestSession()
+
+        // Sequence 2 arrives before sequence 1 and must not take effect yet.
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertFalse(session.coordinator.opponentReady)
+        XCTAssertNil(session.coordinator.receivedGameConfig)
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.receivedGameConfig?.questions.count, 15)
+        XCTAssertTrue(session.coordinator.opponentReady)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedUnresolvedSequenceGapTimesOut() async throws {
+        let scheduler = TestScheduler()
+        let session = try await hardenedGuestSession(scheduler: scheduler)
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertNil(session.coordinator.terminalFailure)
+
+        scheduler.advance(by: 5)
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .timedOut(.sequenceGap))
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedExcessiveSequenceGapEndsMatch() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID,
+                sequence: 2 + MultiplayerSequenceBuffer.maximumSequenceGap,
+                payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .sequenceGap)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedSequenceBufferOverflowEndsMatch() async throws {
+        let session = try await hardenedGuestSession()
+        // Fill the buffer while sequence 1 stays missing.
+        for offset in 0..<MultiplayerSequenceBuffer.maximumBufferedMessages {
+            session.transport.emitRaw(
+                try MultiplayerWireCodec.encode(.init(
+                    matchID: session.matchID,
+                    sequence: UInt64(2 + offset),
+                    payload: .playerReady(roundIndex: 0)
+                )),
+                from: session.opponent
+            )
+        }
+        await drainTransportEvents()
+        XCTAssertNil(session.coordinator.terminalFailure)
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID,
+                sequence: UInt64(2 + MultiplayerSequenceBuffer.maximumBufferedMessages),
+                payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .sequenceBufferOverflow)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedRoundPayloadBeforeConfigurationIsUnexpectedPhase() async throws {
+        let session = try await hardenedGuestSession()
+        // An answer is legal once a round is loaded, but never before a configuration exists.
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .answerSubmitted(.init(questionIndex: 0, answerIndex: 0, responseTimeMs: 10))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .unexpectedPhase)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedGuestRejectsHandshakeItShouldNeverReceive() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .acknowledged(.init(
+                    protocolVersion: MultiplayerMatchConfiguration.protocolVersion,
+                    contentVersion: "content-a",
+                    capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities
+                ))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .unexpectedMessage)
+    }
+
+    func testHardenedTransportSendFailureEndsMatchWithTypedFailure() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.rawSendFailure = MultiplayerTransportError.notConnected
+
+        session.coordinator.sendPlayerReady()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .transportFailure)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    // MARK: - QEB-02 configuration validation
+
+    func testHardenedGuestAcceptsCanonicalConfiguration() async throws {
+        let session = try await hardenedGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.receivedGameConfig?.questions.count, 15)
+        XCTAssertEqual(session.coordinator.lastConfigurationRejections, [])
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedGuestRejectsEachInvalidConfigurationFieldIndependently() async throws {
+        XCTAssertEqual(Self.invalidConfigurationCases.count, 28)
+        for testCase in Self.invalidConfigurationCases {
+            let session = try await hardenedGuestSession()
+            session.transport.emitRaw(
+                try MultiplayerWireCodec.encode(.init(
+                    matchID: session.matchID, sequence: 1,
+                    payload: .gameConfig(.init(testCase.config))
+                )),
+                from: session.opponent
+            )
+            await drainTransportEvents()
+
+            XCTAssertNil(
+                session.coordinator.receivedGameConfig,
+                "\(testCase.name) published an unplayable configuration"
+            )
+            XCTAssertEqual(
+                session.coordinator.terminalFailure,
+                .invalidConfiguration,
+                "\(testCase.name) did not end the match"
+            )
+            XCTAssertEqual(
+                session.coordinator.lastConfigurationRejections,
+                testCase.rejections,
+                "\(testCase.name) reported the wrong reason"
+            )
+        }
+    }
+
+    func testHardenedHostRejectsTheSameInvalidConfigurationsAsTheGuest() async throws {
+        for testCase in Self.invalidConfigurationCases {
+            let session = try await hardenedHostSession()
+            session.coordinator.sendGameConfig(testCase.config)
+
+            XCTAssertEqual(
+                session.coordinator.terminalFailure,
+                .invalidConfiguration,
+                "\(testCase.name) was transmitted by the host"
+            )
+            XCTAssertEqual(
+                session.coordinator.lastConfigurationRejections,
+                testCase.rejections,
+                "\(testCase.name) reported the wrong reason on the host"
+            )
+            // The handshake and the refused configuration are the only wire traffic.
+            XCTAssertEqual(session.transport.sentRawPayloads.count, 1, testCase.name)
+        }
+    }
+
+    func testHardenedHostSendsAndAdoptsACanonicalConfiguration() async throws {
+        let session = try await hardenedHostSession()
+        session.coordinator.sendGameConfig(canonicalGameConfig())
+
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertEqual(session.coordinator.activeQuestions.count, 15)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, 2)
+    }
+
+    // MARK: - QEB-02 round payload validation
+
+    func testHardenedAnswerRejectsIndexBeyondTheQuestionsAnswerCount() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .answerSubmitted(.init(questionIndex: 0, answerIndex: 4, responseTimeMs: 10))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.opponentAnswer)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedAnswerAcceptsSkipAndTimeoutSentinels() async throws {
+        for sentinel in [-1, -2] {
+            let session = try await configuredGuestSession()
+            session.transport.emitRaw(
+                try MultiplayerWireCodec.encode(.init(
+                    matchID: session.matchID, sequence: 2,
+                    payload: .answerSubmitted(
+                        .init(questionIndex: 0, answerIndex: sentinel, responseTimeMs: 10)
+                    )
+                )),
+                from: session.opponent
+            )
+            await drainTransportEvents()
+
+            XCTAssertEqual(session.coordinator.opponentAnswer?.answerIndex, sentinel)
+            XCTAssertNil(session.coordinator.terminalFailure)
+        }
+    }
+
+    func testHardenedAnswerRejectsIndexBelowTheSkipSentinel() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .answerSubmitted(.init(questionIndex: 0, answerIndex: -3, responseTimeMs: 10))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.opponentAnswer)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedAnswerRejectsResponseTimeOutsideTheConfiguredRoundTimer() async throws {
+        let rules = QuizRulesConfiguration.serbianCompatible.multiplayer
+        for responseTime in [-1, rules.timerDurationMilliseconds + 1] {
+            let session = try await configuredGuestSession()
+            session.transport.emitRaw(
+                try MultiplayerWireCodec.encode(.init(
+                    matchID: session.matchID, sequence: 2,
+                    payload: .answerSubmitted(
+                        .init(questionIndex: 0, answerIndex: 0, responseTimeMs: responseTime)
+                    )
+                )),
+                from: session.opponent
+            )
+            await drainTransportEvents()
+
+            XCTAssertNil(session.coordinator.opponentAnswer)
+            XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload, "\(responseTime)")
+        }
+    }
+
+    func testHardenedStaleRoundIndexIsIgnoredRatherThanTerminal() async throws {
+        let session = try await configuredGuestSession()
+        session.coordinator.questionsCompleted = 1
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .answerSubmitted(.init(questionIndex: 0, answerIndex: 0, responseTimeMs: 10))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.opponentAnswer)
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedQuestionResultRejectsCorrectIndexBeyondTheAnswerCount() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .questionResult(roundResult(correctAnswerIndex: 4))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.questionResult)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedQuestionResultRejectsPointsTheScoringRulesCannotAward() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .questionResult(
+                    roundResult(guestPointsAwarded: 999, guestTotalScore: 999)
+                )
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.questionResult)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedQuestionResultRejectsTotalsThatDoNotFollowFromAwardedPoints() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .questionResult(roundResult(guestTotalScore: 40))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.questionResult)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedQuestionResultRejectsAScoreThatRewindsThePreviousTotal() async throws {
+        let session = try await configuredGuestSession()
+        session.coordinator.questionsCompleted = 1
+        session.coordinator.lastGuestScore = 10
+        session.coordinator.lastHostScore = 10
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .questionResult(
+                    roundResult(
+                        questionIndex: 1,
+                        hostPointsAwarded: 0,
+                        guestPointsAwarded: 10,
+                        hostTotalScore: 10,
+                        guestTotalScore: 10
+                    )
+                )
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.questionResult)
+        XCTAssertEqual(session.coordinator.terminalFailure, .invalidRoundPayload)
+    }
+
+    func testHardenedQuestionResultAcceptsAResultTheConfiguredRulesProduce() async throws {
+        let session = try await configuredGuestSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .questionResult(roundResult())
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.questionResult?.guestTotalScore, 10)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedGuestRejectsAQuestionResultOnlyAHostMaySend() async throws {
+        let session = try await configuredHostSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1, payload: .questionResult(roundResult())
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertNil(session.coordinator.questionResult)
+        XCTAssertEqual(session.coordinator.terminalFailure, .unexpectedMessage)
+    }
+
+    func testHardenedHostRejectsAGameConfigurationOnlyAHostMaySend() async throws {
+        let session = try await configuredHostSession()
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .unexpectedMessage)
+    }
+
+    // MARK: - QEB-02 pause, resume, and lifecycle
+
+    func testHardenedResumeWithoutPauseIsIgnored() async throws {
+        let session = try await configuredGuestSession()
+        session.coordinator.transitionToPlaying()
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .resume
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.sessionState, .playing)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedPauseAndResumeRestoreThePhaseThatWasInterrupted() async throws {
+        let session = try await configuredGuestSession()
+        session.coordinator.transitionToWaitingForOpponent()
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .pause
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(session.coordinator.sessionState, .opponentPaused)
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 3, payload: .resume
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+
+        XCTAssertEqual(session.coordinator.sessionState, .waitingForOpponent)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedDisconnectReachesOneTerminalResultInEveryPhaseForBothRoles() async throws {
+        for role in [MultiplayerRole.host, .guest] {
+            for phase in Self.interruptiblePhases {
+                let scheduler = TestScheduler()
+                let session = try await configuredSession(role: role, scheduler: scheduler)
+                phase.apply(session.coordinator)
+
+                session.transport.emit(.disconnected(from: session.opponent))
+                await drainTransportEvents()
+                XCTAssertEqual(session.coordinator.sessionState, .reconnecting, "\(role) \(phase.name)")
+
+                scheduler.advance(by: 3)
+                XCTAssertEqual(
+                    session.coordinator.gameEndResult?.reason,
+                    .opponentLeft,
+                    "\(role) \(phase.name)"
+                )
+                XCTAssertTrue(session.coordinator.sessionState.isTerminal, "\(role) \(phase.name)")
+
+                // A second disconnect after the terminal result changes nothing.
+                let terminal = session.coordinator.gameEndResult
+                session.transport.emit(.disconnected(from: session.opponent))
+                await drainTransportEvents()
+                scheduler.advance(by: 60)
+                XCTAssertEqual(session.coordinator.gameEndResult, terminal, "\(role) \(phase.name)")
+            }
+        }
+    }
+
+    func testHardenedReconnectRestoresTheInterruptedPhaseForBothRoles() async throws {
+        for role in [MultiplayerRole.host, .guest] {
+            for phase in Self.interruptiblePhases {
+                let scheduler = TestScheduler()
+                let session = try await configuredSession(role: role, scheduler: scheduler)
+                phase.apply(session.coordinator)
+                let before = session.coordinator.sessionState
+
+                session.transport.emit(.reconnecting(to: session.opponent))
+                await drainTransportEvents()
+                session.transport.emit(.reconnected(to: session.opponent))
+                await drainTransportEvents()
+
+                XCTAssertEqual(session.coordinator.sessionState, before, "\(role) \(phase.name)")
+                scheduler.advance(by: 60)
+                XCTAssertFalse(session.coordinator.sessionState.isTerminal, "\(role) \(phase.name)")
+            }
+        }
+    }
+
+    func testHardenedDisconnectWhileNegotiatingReachesOneTerminalResultForBothRoles() async throws {
+        for role in [MultiplayerRole.host, .guest] {
+            let scheduler = TestScheduler()
+            let transport = FakeTransport()
+            let opponent = MultiplayerPlayer(id: "peer", displayName: "Peer")
+            let coordinator = MultiplayerGameCoordinator(scheduler: scheduler)
+            coordinator.startGame(
+                transport: transport,
+                opponent: opponent,
+                role: role,
+                matchConfiguration: try hardenedConfiguration(contentVersion: "content-a")
+            )
+            XCTAssertEqual(coordinator.handshakeStatus, .negotiating, "\(role)")
+            XCTAssertFalse(coordinator.handshakeAccepted, "\(role)")
+
+            transport.emit(.disconnected(from: opponent))
+            await drainTransportEvents()
+            scheduler.advance(by: 3)
+
+            XCTAssertEqual(coordinator.gameEndResult?.reason, .opponentLeft, "\(role)")
+            XCTAssertTrue(coordinator.sessionState.isTerminal, "\(role)")
+
+            let terminal = coordinator.gameEndResult
+            scheduler.advance(by: 60)
+            XCTAssertEqual(coordinator.gameEndResult, terminal, "\(role)")
+        }
+    }
+
+    func testHardenedDisconnectWhilePausedReachesOneTerminalResultForBothRoles() async throws {
+        for role in [MultiplayerRole.host, .guest] {
+            let scheduler = TestScheduler()
+            let session = try await configuredSession(role: role, scheduler: scheduler)
+            session.transport.emitRaw(
+                try MultiplayerWireCodec.encode(.init(
+                    matchID: session.matchID,
+                    sequence: role == .guest ? 2 : 1,
+                    payload: .pause
+                )),
+                from: session.opponent
+            )
+            await drainTransportEvents()
+            XCTAssertEqual(session.coordinator.sessionState, .opponentPaused, "\(role)")
+
+            session.transport.emit(.disconnected(from: session.opponent))
+            await drainTransportEvents()
+            XCTAssertEqual(session.coordinator.sessionState, .reconnecting, "\(role)")
+
+            scheduler.advance(by: 3)
+            XCTAssertEqual(session.coordinator.gameEndResult?.reason, .opponentLeft, "\(role)")
+            XCTAssertTrue(session.coordinator.sessionState.isTerminal, "\(role)")
+
+            // The pause deadline that was still pending cannot produce a second outcome.
+            let terminal = session.coordinator.gameEndResult
+            scheduler.advance(by: 120)
+            XCTAssertEqual(session.coordinator.gameEndResult, terminal, "\(role)")
+        }
+    }
+
+    func testHardenedDisconnectInATerminalPhaseCannotReplaceTheResult() async throws {
+        for role in [MultiplayerRole.host, .guest] {
+            let scheduler = TestScheduler()
+            let session = try await configuredSession(role: role, scheduler: scheduler)
+            session.coordinator.sendGameEnd(
+                GameEndPayload(hostFinalScore: 0, guestFinalScore: 0, reason: .completed)
+            )
+            let terminal = session.coordinator.gameEndResult
+
+            session.transport.emit(.disconnected(from: session.opponent))
+            await drainTransportEvents()
+            scheduler.advance(by: 60)
+
+            XCTAssertEqual(session.coordinator.gameEndResult, terminal, "\(role)")
+            XCTAssertEqual(session.coordinator.gameEndResult?.reason, .completed, "\(role)")
+        }
+    }
+
+    // MARK: - QEB-02 timeouts
+
+    func testHardenedConfigurationTimeoutEndsMatch() async throws {
+        let scheduler = TestScheduler()
+        let session = try await hardenedGuestSession(scheduler: scheduler)
+
+        scheduler.advance(by: 10)
+
+        XCTAssertEqual(session.coordinator.terminalFailure, .timedOut(.gameConfiguration))
+        XCTAssertEqual(session.coordinator.gameEndResult?.reason, .disconnected)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedReadyTimeoutRetriesTwiceThenEndsMatch() async throws {
+        let scheduler = TestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        let baseline = session.transport.sentRawPayloads.count
+
+        session.coordinator.sendPlayerReady()
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 1)
+
+        scheduler.advance(by: 10)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 2)
+        scheduler.advance(by: 10)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 3)
+        XCTAssertNil(session.coordinator.terminalFailure)
+
+        scheduler.advance(by: 10)
+        XCTAssertEqual(session.coordinator.terminalFailure, .timedOut(.ready))
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedReadyTimeoutStopsRetryingOnceTheOpponentIsReady() async throws {
+        let scheduler = TestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        session.coordinator.sendPlayerReady()
+        let afterSend = session.transport.sentRawPayloads.count
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .playerReady(roundIndex: 0)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        scheduler.advance(by: 60)
+
+        XCTAssertTrue(session.coordinator.opponentReady)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, afterSend)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedQuestionResultTimeoutRetriesTwiceThenEndsMatch() async throws {
+        let scheduler = TestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        let baseline = session.transport.sentRawPayloads.count
+
+        session.coordinator.sendAnswer(.init(questionIndex: 0, answerIndex: 0, responseTimeMs: 10))
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 1)
+
+        scheduler.advance(by: 5)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 2)
+        scheduler.advance(by: 5)
+        XCTAssertEqual(session.transport.sentRawPayloads.count, baseline + 3)
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+
+        // Retries are exhausted, so the session escalates to a disconnect that terminates once.
+        scheduler.advance(by: 5)
+        XCTAssertEqual(session.coordinator.sessionState, .reconnecting)
+        scheduler.advance(by: 3)
+        XCTAssertEqual(session.coordinator.gameEndResult?.reason, .opponentLeft)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedPauseTimeoutEndsMatch() async throws {
+        let scheduler = TestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .pause
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(session.coordinator.sessionState, .opponentPaused)
+
+        scheduler.advance(by: 60)
+        XCTAssertEqual(session.coordinator.sessionState, .reconnecting)
+
+        scheduler.advance(by: 10)
+        XCTAssertEqual(session.coordinator.gameEndResult?.reason, .opponentLeft)
+        XCTAssertTrue(session.coordinator.sessionState.isTerminal)
+    }
+
+    func testHardenedGameEndTimeoutCompletesMatchExactlyOnce() async throws {
+        let scheduler = TestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        session.coordinator.questionsCompleted = 15
+        session.coordinator.lastHostScore = 20
+        session.coordinator.lastGuestScore = 30
+        session.coordinator.startGameEndTimeout()
+
+        scheduler.advance(by: 5)
+        XCTAssertEqual(
+            session.coordinator.gameEndResult,
+            GameEndPayload(hostFinalScore: 20, guestFinalScore: 30, reason: .completed)
+        )
+
+        // A late host payload cannot restate the outcome.
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2,
+                payload: .gameEnd(.init(hostFinalScore: 99, guestFinalScore: 0, reason: .completed))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(session.coordinator.gameEndResult?.hostFinalScore, 20)
+    }
+
+    func testHardenedDuplicateAndReorderedGameEndProducesOneTerminalResult() async throws {
+        let session = try await configuredGuestSession()
+        session.coordinator.questionsCompleted = 1
+        session.coordinator.lastHostScore = 10
+        session.coordinator.lastGuestScore = 5
+        let terminal = MultiplayerWireEnvelope(
+            matchID: session.matchID, sequence: 3,
+            payload: .gameEnd(.init(hostFinalScore: 10, guestFinalScore: 5, reason: .completed))
+        )
+
+        // The terminal payload arrives before the round message that precedes it, then twice more.
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(terminal), from: session.opponent)
+        await drainTransportEvents()
+        XCTAssertNil(session.coordinator.gameEndResult)
+
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 2, payload: .playerReady(roundIndex: 1)
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(session.coordinator.gameEndResult?.reason, .completed)
+
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(terminal), from: session.opponent)
+        session.transport.emitRaw(try MultiplayerWireCodec.encode(.init(
+            matchID: session.matchID, sequence: 4,
+            payload: .gameEnd(.init(hostFinalScore: 99, guestFinalScore: 0, reason: .completed))
+        )), from: session.opponent)
+        await drainTransportEvents()
+
+        XCTAssertEqual(
+            session.coordinator.gameEndResult,
+            GameEndPayload(hostFinalScore: 10, guestFinalScore: 5, reason: .completed)
+        )
+    }
+
+    func testHardenedLateSchedulerCallbacksCannotChangeATerminalResult() async throws {
+        let scheduler = CancellationIgnoringTestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        session.coordinator.sendPlayerReady()
+        session.coordinator.sendAnswer(.init(questionIndex: 0, answerIndex: 0, responseTimeMs: 10))
+
+        session.coordinator.sendGameEnd(
+            GameEndPayload(hostFinalScore: 1, guestFinalScore: 2, reason: .completed)
+        )
+        let terminal = session.coordinator.gameEndResult
+
+        scheduler.runPendingBatch()
+        scheduler.runPendingBatch()
+
+        XCTAssertEqual(session.coordinator.gameEndResult, terminal)
+        XCTAssertNil(session.coordinator.terminalFailure)
+    }
+
+    func testHardenedLateSchedulerCallbacksCannotAffectTheNextMatch() async throws {
+        let scheduler = CancellationIgnoringTestScheduler()
+        let session = try await configuredGuestSession(scheduler: scheduler)
+        session.coordinator.sendPlayerReady()
+
+        // A new match generation begins before the stale ready timeout is delivered. The second
+        // match schedules no work of its own, so the batch contains only stale callbacks.
+        let secondTransport = FakeTransport(localPlayer: MultiplayerPlayer(id: "host", displayName: "Host"))
+        session.coordinator.startGame(
+            transport: secondTransport,
+            opponent: session.opponent,
+            role: .host
+        )
+        scheduler.runPendingBatch()
+
+        XCTAssertNil(session.coordinator.terminalFailure)
+        XCTAssertFalse(session.coordinator.sessionState.isTerminal)
+        XCTAssertEqual(session.coordinator.sessionState, .waitingForConfig)
+        XCTAssertTrue(secondTransport.sentRawPayloads.isEmpty)
+        XCTAssertTrue(secondTransport.sentMessages.isEmpty)
+        XCTAssertEqual(session.coordinator.activeQuestions, [])
+    }
+
+    func testHardenedAnalyticsUsesTheAppSuppliedTransportLabel() async throws {
+        let analytics = RecordingAnalytics()
+        let scheduler = TestScheduler()
+        let configuration = try MultiplayerMatchConfiguration(
+            contentVersion: "content-a",
+            analyticsTransportLabel: "app-chosen-label",
+            expectedQuestionCount: 15,
+            allowedCategoryIDs: ["nature"],
+            multiplayerRules: QuizRulesConfiguration.serbianCompatible.multiplayer
+        )
+        let session = try await hardenedGuestSession(
+            scheduler: scheduler,
+            analytics: analytics,
+            configuration: configuration
+        )
+
+        session.transport.emit(.disconnected(from: session.opponent))
+        await drainTransportEvents()
+        scheduler.advance(by: 3)
+
+        XCTAssertEqual(analytics.disconnects.map(\.2), ["app-chosen-label"])
     }
 
     func testHardenedWrongSenderIsIgnoredAndLegacyTransportIsRejected() async throws {
@@ -801,16 +1726,361 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         XCTAssertEqual(legacyCoordinator.terminalFailure, .unsupportedWireTransport)
     }
 
-    private func hardenedConfiguration(contentVersion: String) throws -> MultiplayerMatchConfiguration {
-        try MultiplayerMatchConfiguration(contentVersion: contentVersion, analyticsTransportLabel: "test")
+    // MARK: - QEB-02 harness
+
+    /// A negotiated hardened session plus everything a test needs to drive its wire.
+    private final class HardenedSession {
+        let coordinator: MultiplayerGameCoordinator
+        let transport: FakeTransport
+        let opponent: MultiplayerPlayer
+        let matchID: UUID
+
+        init(
+            coordinator: MultiplayerGameCoordinator,
+            transport: FakeTransport,
+            opponent: MultiplayerPlayer,
+            matchID: UUID
+        ) {
+            self.coordinator = coordinator
+            self.transport = transport
+            self.opponent = opponent
+            self.matchID = matchID
+        }
+    }
+
+    private func handshakeData(
+        matchID: UUID,
+        sequence: UInt64 = 0,
+        protocolVersion: Int = MultiplayerMatchConfiguration.protocolVersion,
+        contentVersion: String = "content-a",
+        capabilities: Set<MultiplayerCapability> = MultiplayerMatchConfiguration.requiredQE6Capabilities,
+        acknowledgement: Bool = false
+    ) throws -> Data {
+        let handshake = MultiplayerHandshakePayload(
+            protocolVersion: protocolVersion,
+            contentVersion: contentVersion,
+            capabilities: capabilities
+        )
+        return try MultiplayerWireCodec.encode(
+            .init(
+                matchID: matchID,
+                sequence: sequence,
+                payload: acknowledgement ? .acknowledged(handshake) : .hello(handshake)
+            )
+        )
+    }
+
+    /// A guest whose handshake has completed. Inbound sequence 0 is the host's opening message,
+    /// so a test's first payload uses sequence 1.
+    private func hardenedGuestSession(
+        scheduler: any QuizEngineScheduler = TestScheduler(),
+        analytics: (any AnalyticsProvider)? = nil,
+        configuration: MultiplayerMatchConfiguration? = nil,
+        negotiates: Bool = true
+    ) async throws -> HardenedSession {
+        let coordinator = MultiplayerGameCoordinator(analytics: analytics, scheduler: scheduler)
+        let transport = FakeTransport(localPlayer: MultiplayerPlayer(id: "guest", displayName: "Guest"))
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        let matchID = UUID()
+        coordinator.startGame(
+            transport: transport,
+            opponent: opponent,
+            role: .guest,
+            matchConfiguration: try configuration ?? hardenedConfiguration(contentVersion: "content-a")
+        )
+        if negotiates {
+            transport.emitRaw(try handshakeData(matchID: matchID), from: opponent)
+            await drainTransportEvents()
+            XCTAssertTrue(coordinator.handshakeAccepted)
+        }
+        return HardenedSession(
+            coordinator: coordinator,
+            transport: transport,
+            opponent: opponent,
+            matchID: matchID
+        )
+    }
+
+    /// A host whose handshake has completed. Inbound sequence 0 is the guest's acknowledgement,
+    /// so a test's first payload uses sequence 1.
+    private func hardenedHostSession(
+        scheduler: any QuizEngineScheduler = TestScheduler(),
+        analytics: (any AnalyticsProvider)? = nil
+    ) async throws -> HardenedSession {
+        let coordinator = MultiplayerGameCoordinator(analytics: analytics, scheduler: scheduler)
+        let transport = FakeTransport(localPlayer: MultiplayerPlayer(id: "host", displayName: "Host"))
+        let opponent = MultiplayerPlayer(id: "guest", displayName: "Guest")
+        coordinator.startGame(
+            transport: transport,
+            opponent: opponent,
+            role: .host,
+            matchConfiguration: try hardenedConfiguration(contentVersion: "content-a")
+        )
+        let matchID = try XCTUnwrap(coordinator.matchID)
+        transport.emitRaw(try handshakeData(matchID: matchID, acknowledgement: true), from: opponent)
+        await drainTransportEvents()
+        XCTAssertTrue(coordinator.handshakeAccepted)
+        return HardenedSession(
+            coordinator: coordinator,
+            transport: transport,
+            opponent: opponent,
+            matchID: matchID
+        )
+    }
+
+    /// A guest that has accepted the canonical configuration at inbound sequence 1, so a test's
+    /// first round payload uses sequence 2.
+    private func configuredGuestSession(
+        scheduler: any QuizEngineScheduler = TestScheduler()
+    ) async throws -> HardenedSession {
+        let session = try await hardenedGuestSession(scheduler: scheduler)
+        session.transport.emitRaw(
+            try MultiplayerWireCodec.encode(.init(
+                matchID: session.matchID, sequence: 1,
+                payload: .gameConfig(.init(canonicalGameConfig()))
+            )),
+            from: session.opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(session.coordinator.receivedGameConfig?.questions.count, 15)
+        return session
+    }
+
+    /// A host that has sent the canonical configuration, so a test's first inbound round payload
+    /// uses sequence 1.
+    private func configuredHostSession(
+        scheduler: any QuizEngineScheduler = TestScheduler()
+    ) async throws -> HardenedSession {
+        let session = try await hardenedHostSession(scheduler: scheduler)
+        session.coordinator.sendGameConfig(canonicalGameConfig())
+        XCTAssertEqual(session.coordinator.activeQuestions.count, 15)
+        return session
+    }
+
+    private func configuredSession(
+        role: MultiplayerRole,
+        scheduler: any QuizEngineScheduler = TestScheduler()
+    ) async throws -> HardenedSession {
+        switch role {
+        case .host: return try await configuredHostSession(scheduler: scheduler)
+        case .guest: return try await configuredGuestSession(scheduler: scheduler)
+        }
+    }
+
+    /// A round result the configured rules can actually produce: the guest answered correctly and
+    /// faster, the host answered incorrectly.
+    private func roundResult(
+        questionIndex: Int = 0,
+        correctAnswerIndex: Int = 0,
+        hostCorrect: Bool = false,
+        guestCorrect: Bool = true,
+        hostResponseTimeMs: Int = 200,
+        guestResponseTimeMs: Int = 150,
+        hostPointsAwarded: Int = -5,
+        guestPointsAwarded: Int = 10,
+        hostTotalScore: Int = -5,
+        guestTotalScore: Int = 10
+    ) -> QuestionResultPayload {
+        QuestionResultPayload(
+            questionIndex: questionIndex,
+            correctAnswerIndex: correctAnswerIndex,
+            hostCorrect: hostCorrect,
+            guestCorrect: guestCorrect,
+            hostResponseTimeMs: hostResponseTimeMs,
+            guestResponseTimeMs: guestResponseTimeMs,
+            hostPointsAwarded: hostPointsAwarded,
+            guestPointsAwarded: guestPointsAwarded,
+            hostTotalScore: hostTotalScore,
+            guestTotalScore: guestTotalScore
+        )
+    }
+
+    private struct InterruptiblePhase {
+        let name: String
+        let apply: @MainActor (MultiplayerGameCoordinator) -> Void
+    }
+
+    /// Every non-terminal phase a match can be interrupted in.
+    private static let interruptiblePhases: [InterruptiblePhase] = [
+        .init(name: "waitingForConfig", apply: { _ in }),
+        .init(name: "loadingRound", apply: { $0.transitionToLoadingRound() }),
+        .init(name: "playing", apply: { $0.transitionToPlaying() }),
+        .init(name: "waitingForOpponent", apply: { $0.transitionToWaitingForOpponent() }),
+        .init(name: "waitingForResult", apply: { $0.transitionToWaitingForResult() }),
+        .init(name: "showingResult", apply: { $0.transitionToShowingResult() })
+    ]
+
+    private struct InvalidConfigurationCase {
+        let name: String
+        let config: GameConfigPayload
+        let rejections: [MultiplayerConfigurationRejection]
+    }
+
+    /// One defect per configuration, so no guard hides behind an earlier one.
+    private static let invalidConfigurationCases: [InvalidConfigurationCase] = {
+        func canonical() -> [Question] { QuizEngineTestFixtures.questions(count: 15) }
+
+        func mutating(
+            _ name: String,
+            questionIndex: Int = 0,
+            rejections: [MultiplayerConfigurationRejection],
+            _ change: (inout Question) -> Void
+        ) -> InvalidConfigurationCase {
+            var questions = canonical()
+            change(&questions[questionIndex])
+            return InvalidConfigurationCase(
+                name: name,
+                config: GameConfigPayload(questions: questions, seed: 1),
+                rejections: rejections
+            )
+        }
+
+        func answers(_ count: Int, correct: Int = 1) -> [Answer] {
+            (0..<count).map { Answer(text: "Answer \($0)", correct: $0 < correct) }
+        }
+
+        var cases: [InvalidConfigurationCase] = [
+            InvalidConfigurationCase(
+                name: "zero questions",
+                config: GameConfigPayload(questions: [], seed: 1),
+                rejections: [.questionCountMismatch(expected: 15, actual: 0)]
+            ),
+            InvalidConfigurationCase(
+                name: "too few questions",
+                config: GameConfigPayload(questions: QuizEngineTestFixtures.questions(count: 14), seed: 1),
+                rejections: [.questionCountMismatch(expected: 15, actual: 14)]
+            ),
+            InvalidConfigurationCase(
+                name: "too many questions",
+                config: GameConfigPayload(questions: QuizEngineTestFixtures.questions(count: 16), seed: 1),
+                rejections: [.questionCountMismatch(expected: 15, actual: 16)]
+            ),
+            mutating("nonpositive question ID", rejections: [.nonPositiveQuestionID(questionIndex: 0, id: 0)]) {
+                $0.id = 0
+            },
+            mutating("negative question ID", rejections: [.nonPositiveQuestionID(questionIndex: 0, id: -4)]) {
+                $0.id = -4
+            },
+            mutating(
+                "duplicate question ID",
+                questionIndex: 1,
+                rejections: [.duplicateQuestionID(questionIndex: 1, id: 1)]
+            ) { $0.id = 1 },
+            mutating("blank question text", rejections: [.blankQuestionText(questionIndex: 0)]) {
+                $0.question = "   "
+            },
+            mutating(
+                "oversized question text",
+                rejections: [.oversizedQuestionText(questionIndex: 0, bytes: 4_097)]
+            ) { $0.question = String(repeating: "q", count: 4_097) },
+            mutating("zero correct answers", rejections: [.invalidCorrectAnswerCount(questionIndex: 0, count: 0)]) {
+                $0.answers = answers(4, correct: 0)
+            },
+            mutating("multiple correct answers", rejections: [.invalidCorrectAnswerCount(questionIndex: 0, count: 2)]) {
+                $0.answers = answers(4, correct: 2)
+            },
+            mutating("blank answer text", rejections: [.blankAnswerText(questionIndex: 0, answerIndex: 2)]) {
+                $0.answers[2] = Answer(text: " \n ", correct: false)
+            },
+            mutating(
+                "normalized-duplicate answer text",
+                rejections: [.duplicateAnswerText(questionIndex: 0, answerIndex: 2)]
+            ) { $0.answers[2] = Answer(text: "  correct\t1 ", correct: false) },
+            mutating(
+                "oversized answer text",
+                rejections: [.oversizedAnswerText(questionIndex: 0, answerIndex: 1, bytes: 4_097)]
+            ) { $0.answers[1] = Answer(text: String(repeating: "a", count: 4_097), correct: false) },
+            mutating("missing categories", rejections: [.missingCategories(questionIndex: 0)]) {
+                $0.categories = []
+            },
+            mutating("blank category", rejections: [.blankCategory(questionIndex: 0, categoryIndex: 0)]) {
+                $0.categories = ["  "]
+            },
+            mutating(
+                "duplicate category",
+                rejections: [.duplicateCategory(questionIndex: 0, categoryID: "nature")]
+            ) { $0.categories = ["nature", "nature"] },
+            mutating(
+                "unknown category",
+                rejections: [.unknownCategory(questionIndex: 0, categoryID: "not-a-category")]
+            ) { $0.categories = ["not-a-category"] },
+            mutating(
+                "oversized category",
+                rejections: [
+                    .unknownCategory(questionIndex: 0, categoryID: String(repeating: "c", count: 129)),
+                    .oversizedCategory(questionIndex: 0, categoryIndex: 0, bytes: 129)
+                ]
+            ) { $0.categories = [String(repeating: "c", count: 129)] },
+            mutating("difficulty below the range", rejections: [.invalidDifficulty(questionIndex: 0, difficulty: 0)]) {
+                $0.difficulty = 0
+            },
+            mutating("difficulty above the range", rejections: [.invalidDifficulty(questionIndex: 0, difficulty: 4)]) {
+                $0.difficulty = 4
+            },
+            mutating(
+                "oversized image name",
+                rejections: [.oversizedImageName(questionIndex: 0, bytes: 257)]
+            ) { $0.imageName = String(repeating: "i", count: 257) },
+            mutating(
+                "oversized description",
+                rejections: [.oversizedDescription(questionIndex: 0, bytes: 8_193)]
+            ) { $0.description = String(repeating: "d", count: 8_193) }
+        ]
+
+        // Every answer count other than exactly four, checked independently.
+        for count in [0, 2, 3, 5, 16] {
+            cases.append(
+                mutating(
+                    "\(count) answers",
+                    rejections: [.invalidAnswerCount(questionIndex: 0, count: count)]
+                        + (count == 0 ? [.invalidCorrectAnswerCount(questionIndex: 0, count: 0)] : [])
+                ) { $0.answers = answers(count, correct: count == 0 ? 0 : 1) }
+            )
+        }
+
+        // More canonical categories than a question may carry.
+        cases.append(
+            mutating(
+                "too many categories",
+                rejections: [.tooManyCategories(questionIndex: 0, count: 9)]
+            ) {
+                $0.categories = [
+                    "nature", "space", "history", "culture", "sport", "science", "music", "film", "art"
+                ]
+            }
+        )
+
+        return cases
+    }()
+
+    private func hardenedConfiguration(
+        contentVersion: String,
+        expectedQuestionCount: Int = 15,
+        allowedCategoryIDs: Set<String> = [
+            "nature", "space", "history", "culture", "sport", "science", "music", "film", "art"
+        ],
+        multiplayerRules: QuizMultiplayerRules = QuizRulesConfiguration.serbianCompatible.multiplayer
+    ) throws -> MultiplayerMatchConfiguration {
+        try MultiplayerMatchConfiguration(
+            contentVersion: contentVersion,
+            analyticsTransportLabel: "test",
+            expectedQuestionCount: expectedQuestionCount,
+            allowedCategoryIDs: allowedCategoryIDs,
+            multiplayerRules: multiplayerRules
+        )
+    }
+
+    /// The canonical configuration every hardened test starts from. Individual tests mutate one
+    /// field so each guard is proven independently.
+    private func canonicalGameConfig(seed: UInt64 = 1) -> GameConfigPayload {
+        GameConfigPayload(questions: QuizEngineTestFixtures.questions(count: 15), seed: seed)
     }
 
     private func makeTerminalHarness(
         store: FakePersistenceStore,
         analytics: RecordingAnalytics,
         matchID: UUID,
-        hostScore: Int = -5,
-        guestScore: Int = 10
+        guestResponseTimeMs: Int = 150
     ) async throws -> TerminalHarness {
         let variant = try QuizEngineTestFixtures.variant(
             questionResource: QuestionResource(bundle: .main, fileName: "unused")
@@ -858,18 +2128,27 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         XCTAssertEqual(coordinator.matchID, matchID)
         XCTAssertTrue(coordinator.handshakeAccepted)
 
-        viewModel.handleGameConfig(
-            GameConfigPayload(
-                questions: QuizEngineTestFixtures.questions(count: 15),
-                seed: 5
-            ),
-            localDisplayName: "Guest"
-        )
+        // The configuration arrives over the hardened wire so this integration test exercises
+        // validation and publication, not a direct view-model call.
         transport.emitRaw(
             try MultiplayerWireCodec.encode(
                 .init(
                     matchID: matchID,
                     sequence: 1,
+                    payload: .gameConfig(.init(canonicalGameConfig(seed: 5)))
+                )
+            ),
+            from: opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(coordinator.receivedGameConfig?.questions.count, 15)
+        XCTAssertEqual(viewModel.questions.count, 15)
+
+        transport.emitRaw(
+            try MultiplayerWireCodec.encode(
+                .init(
+                    matchID: matchID,
+                    sequence: 2,
                     payload: .questionResult(
                         .init(
                             questionIndex: 0,
@@ -877,11 +2156,11 @@ final class QuizEngineMultiplayerTests: XCTestCase {
                             hostCorrect: false,
                             guestCorrect: true,
                             hostResponseTimeMs: 200,
-                            guestResponseTimeMs: 150,
+                            guestResponseTimeMs: guestResponseTimeMs,
                             hostPointsAwarded: -5,
                             guestPointsAwarded: 10,
-                            hostTotalScore: hostScore,
-                            guestTotalScore: guestScore
+                            hostTotalScore: -5,
+                            guestTotalScore: 10
                         )
                     )
                 )
@@ -890,7 +2169,7 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         )
         await drainTransportEvents()
         XCTAssertEqual(viewModel.myCorrectCount, 1)
-        XCTAssertEqual(viewModel.myResponseTimes, [150])
+        XCTAssertEqual(viewModel.myResponseTimes, [guestResponseTimeMs])
         XCTAssertEqual(coordinator.questionsCompleted, 1)
 
         return TerminalHarness(
@@ -931,7 +2210,7 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         try MultiplayerWireCodec.encode(
             .init(
                 matchID: matchID,
-                sequence: 2,
+                sequence: 3,
                 payload: .gameEnd(
                     .init(
                         hostFinalScore: hostScore,

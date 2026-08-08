@@ -537,7 +537,11 @@ public final class FakeTransport: MultiplayerTransport {
         sentMessages.append(message)
     }
 
+    /// Set to make the app-owned transport refuse the next and every later raw send.
+    public var rawSendFailure: (any Error)?
+
     public func sendRawPayload(_ data: Data) throws {
+        if let rawSendFailure { throw rawSendFailure }
         sentRawPayloads.append(data)
     }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag is unchanged.
+
+- QEB-02: add `QuizQuestionStructureRules` to `QuizEngineCore` as the single definition of answer count, answer-text normalization, correct-answer count, difficulty bounds, and category membership, and route both `QuizContentValidator` and the multiplayer wire validator through it.
+- QEB-02: add the expected multiplayer question count, the canonical allowed category IDs, and the multiplayer rules to `MultiplayerMatchConfiguration`, with a variant-derived convenience initializer.
+- QEB-02: validate outgoing host configurations before transmission and incoming guest configurations before publication, against the shared structural rules and all payload byte bounds.
+- QEB-02: validate answers and question results against the active round and the actual question, and validate awarded points and score progression against the configured scoring rules instead of broad constants.
+- QEB-02: replace ad-hoc replay suppression with a bounded contiguous-sequence buffer, and give ordering gaps, buffer overflow, unexpected phases, wrong-role messages, invalid configurations, impossible round payloads, phase deadlines, and transport send failures typed terminal outcomes.
+- QEB-02: report a duplicate category from content validation as `QuizContentValidationIssue.duplicateCategory`.
+- QEB-02: add the protocol, configuration, ordering, lifecycle, timeout, host/guest, and late-callback test matrix, with one invalid field per configuration payload.
+
 ## v0.2.0
 
 - Make StarterQuiz consume the public `QuizContentValidator` contract directly, so the reference consumer validates the same structural rules exposed to apps.

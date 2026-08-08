@@ -214,6 +214,83 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    func testContentValidationRejectsDuplicateCategories() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 1, categories: ["space", "space"])
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [.duplicateCategory(questionIndex: 0, categoryID: "space")]
+        )
+    }
+
+    func testQuestionStructureRulesDefineTheSingleSharedStructuralContract() {
+        // These constants are the ones both the local validator and the multiplayer wire
+        // validator resolve against; a second definition anywhere is the defect this guards.
+        XCTAssertEqual(QuizQuestionStructureRules.requiredAnswerCount, 4)
+        XCTAssertEqual(QuizQuestionStructureRules.requiredCorrectAnswerCount, 1)
+        XCTAssertEqual(QuizQuestionStructureRules.difficultyRange, 1...3)
+
+        XCTAssertTrue(QuizQuestionStructureRules.isBlank(""))
+        XCTAssertTrue(QuizQuestionStructureRules.isBlank("  \n\t"))
+        XCTAssertFalse(QuizQuestionStructureRules.isBlank("a"))
+
+        XCTAssertEqual(
+            QuizQuestionStructureRules.normalizedAnswerText("  New\t York "),
+            QuizQuestionStructureRules.normalizedAnswerText("new york")
+        )
+        XCTAssertNotEqual(
+            QuizQuestionStructureRules.normalizedAnswerText("New York"),
+            QuizQuestionStructureRules.normalizedAnswerText("New Yorks")
+        )
+
+        for difficulty in [Int.min, 0, 4, Int.max] {
+            XCTAssertFalse(QuizQuestionStructureRules.isValidDifficulty(difficulty), "\(difficulty)")
+        }
+        for difficulty in 1...3 {
+            XCTAssertTrue(QuizQuestionStructureRules.isValidDifficulty(difficulty), "\(difficulty)")
+        }
+        for count in [0, 1, 2, 3, 5, 16] {
+            XCTAssertFalse(QuizQuestionStructureRules.isValidAnswerCount(count), "\(count)")
+        }
+        XCTAssertTrue(QuizQuestionStructureRules.isValidAnswerCount(4))
+    }
+
+    func testQuestionStructureRulesReportEveryIssueInDeterministicOrder() {
+        let issues = QuizQuestionStructureRules.issues(
+            in: Question(
+                id: -1,
+                question: "Question",
+                answers: [
+                    Answer(text: "Same", correct: true),
+                    Answer(text: " same ", correct: false),
+                    Answer(text: "  ", correct: false)
+                ],
+                categories: ["space", "space", "  ", "unknown"],
+                difficulty: 7
+            ),
+            allowedCategoryIDs: ["space", "nature"]
+        )
+
+        XCTAssertEqual(
+            issues,
+            [
+                .nonPositiveID(id: -1),
+                .duplicateCategory(categoryIndex: 1, categoryID: "space"),
+                .blankCategory(categoryIndex: 2, categoryID: "  "),
+                .unknownCategory(categoryIndex: 3, categoryID: "unknown"),
+                .invalidAnswerCount(count: 3),
+                .duplicateAnswerText(answerIndex: 1, text: " same "),
+                .blankAnswerText(answerIndex: 2, text: "  "),
+                .invalidDifficulty(difficulty: 7)
+            ]
+        )
+    }
+
     func testContentValidationAcceptsValidContentAtDifficultyBounds() {
         let result = QuizContentValidator.validate(
             QuestionData(questions: [
