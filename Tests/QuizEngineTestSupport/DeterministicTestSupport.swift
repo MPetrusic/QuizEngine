@@ -197,7 +197,9 @@ public final class FakePersistenceStore: QuizEnginePersistenceStore, @unchecked 
     public var transactionMarkerData: Data?
     public var readBackOverride: Data?
     public var failurePoint: FakePersistenceFailurePoint?
+    public var onReplacePrimaryAttempt: (() -> Void)?
     public private(set) var operations: [String] = []
+    public private(set) var replacePrimaryAttemptCount = 0
 
     public init(
         primaryData: Data? = nil,
@@ -228,6 +230,8 @@ public final class FakePersistenceStore: QuizEnginePersistenceStore, @unchecked 
     }
 
     public func replacePrimary(with data: Data) throws {
+        replacePrimaryAttemptCount += 1
+        onReplacePrimaryAttempt?()
         if failurePoint == .partialReplacePrimary {
             failurePoint = nil
             operations.append("partialReplacePrimary")
@@ -299,6 +303,31 @@ public final class FakePersistenceStore: QuizEnginePersistenceStore, @unchecked 
 }
 
 public final class RecordingAnalytics: AnalyticsProvider {
+    public struct MultiplayerCompletion: Equatable, Sendable {
+        public let result: String
+        public let myScore: Int
+        public let opponentScore: Int
+        public let questionsCompleted: Int
+        public let durationSeconds: Int
+        public let transportType: String
+
+        public init(
+            result: String,
+            myScore: Int,
+            opponentScore: Int,
+            questionsCompleted: Int,
+            durationSeconds: Int,
+            transportType: String
+        ) {
+            self.result = result
+            self.myScore = myScore
+            self.opponentScore = opponentScore
+            self.questionsCompleted = questionsCompleted
+            self.durationSeconds = durationSeconds
+            self.transportType = transportType
+        }
+    }
+
     private struct State: Sendable {
         var gameStarts: [(String?, GameMode)] = []
         var gameEnds: [(Int, Int, Int, Int)] = []
@@ -307,6 +336,7 @@ public final class RecordingAnalytics: AnalyticsProvider {
         var extraLives: [ExtraLifeMethod] = []
         var achievements: [(String, Int)] = []
         var disconnects: [(Int, String, String)] = []
+        var multiplayerCompletions: [MultiplayerCompletion] = []
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -318,6 +348,7 @@ public final class RecordingAnalytics: AnalyticsProvider {
     public var extraLives: [ExtraLifeMethod] { state.withLock { $0.extraLives } }
     public var achievements: [(String, Int)] { state.withLock { $0.achievements } }
     public var disconnects: [(Int, String, String)] { state.withLock { $0.disconnects } }
+    public var multiplayerCompletions: [MultiplayerCompletion] { state.withLock { $0.multiplayerCompletions } }
 
     public init() {}
 
@@ -348,6 +379,28 @@ public final class RecordingAnalytics: AnalyticsProvider {
 
     public func logMultiplayerDisconnect(questionsCompleted: Int, reason: String, transportType: String) {
         state.withLock { $0.disconnects.append((questionsCompleted, reason, transportType)) }
+    }
+
+    public func logMultiplayerMatchCompleted(
+        result: String,
+        myScore: Int,
+        opponentScore: Int,
+        questionsCompleted: Int,
+        durationSeconds: Int,
+        transportType: String
+    ) {
+        state.withLock {
+            $0.multiplayerCompletions.append(
+                MultiplayerCompletion(
+                    result: result,
+                    myScore: myScore,
+                    opponentScore: opponentScore,
+                    questionsCompleted: questionsCompleted,
+                    durationSeconds: durationSeconds,
+                    transportType: transportType
+                )
+            )
+        }
     }
 }
 

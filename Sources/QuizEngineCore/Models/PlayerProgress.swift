@@ -252,6 +252,7 @@ public enum MultiplayerResultRecordingOutcome: Equatable, Sendable {
     case alreadyRecorded
     case conflictingReceipt
     case rejected
+    case persistenceFailed(PersistenceError)
 }
 
 public struct PlayerProgress: Codable, Equatable, Sendable {

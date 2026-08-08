@@ -413,6 +413,255 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         premium.endMatch()
     }
 
+    func testTerminalRecordFingerprintUsesStableCanonicalEncoding() {
+        let record = MultiplayerTerminalRecord(
+            matchID: "match-1",
+            localRole: .guest,
+            terminalReason: .completed,
+            hostFinalScore: -5,
+            guestFinalScore: 10,
+            questionsCompleted: 1,
+            questionsCorrect: 1,
+            awardedCoins: 3,
+            responseTimes: [150, 200]
+        )
+
+        XCTAssertEqual(
+            record.fingerprint,
+            "qeb01-v1|8:match_id|7:match-1|10:local_role|5:guest|15:terminal_reason|9:completed|16:host_final_score|2:-5|17:guest_final_score|2:10|19:questions_completed|1:1|17:questions_correct|1:1|13:awarded_coins|1:3|17:response_times_ms|7:150,200"
+        )
+        XCTAssertEqual(
+            record.fingerprint,
+            MultiplayerTerminalRecord(
+                matchID: "match-1",
+                localRole: .guest,
+                terminalReason: .completed,
+                hostFinalScore: -5,
+                guestFinalScore: 10,
+                questionsCompleted: 1,
+                questionsCorrect: 1,
+                awardedCoins: 3,
+                responseTimes: [150, 200]
+            ).fingerprint
+        )
+        XCTAssertNotEqual(
+            record.fingerprint,
+            MultiplayerTerminalRecord(
+                matchID: "match-1",
+                localRole: .host,
+                terminalReason: .completed,
+                hostFinalScore: -5,
+                guestFinalScore: 10,
+                questionsCompleted: 1,
+                questionsCorrect: 1,
+                awardedCoins: 3,
+                responseTimes: [150, 200]
+            ).fingerprint
+        )
+    }
+
+    func testTerminalCommitFailureRemainsPendingAndDoesNotMutateProgress() async throws {
+        let store = FakePersistenceStore()
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000101")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        let before = ProgressSnapshot(harness.manager.progress)
+        store.failurePoint = .replacePrimary
+
+        await deliverTerminal(to: harness)
+
+        XCTAssertEqual(ProgressSnapshot(harness.manager.progress), before)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 0)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 0)
+        assertPending(harness.viewModel, failure: .persistenceFailed)
+    }
+
+    func testPendingTerminalCommitRetriesOnceAndRecordsRewardOnce() async throws {
+        let store = FakePersistenceStore()
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000102")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        store.failurePoint = .replacePrimary
+        await deliverTerminal(to: harness)
+
+        harness.viewModel.retryPendingTerminalCommit()
+
+        assertRecordedProgress(harness.manager.progress, initialCoins: 100)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 2)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 1)
+        XCTAssertEqual(
+            harness.viewModel.terminalCommitState,
+            .committed(receiptID: matchID.uuidString.lowercased())
+        )
+        XCTAssertNil(harness.viewModel.terminalCommitFailure)
+
+        harness.viewModel.retryPendingTerminalCommit()
+        assertRecordedProgress(harness.manager.progress, initialCoins: 100)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 2)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 1)
+    }
+
+    func testDuplicateTerminalDuringCommitDoesNotStartSecondWrite() async throws {
+        let store = FakePersistenceStore()
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000103")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        var observedCommittingState = false
+        store.onReplacePrimaryAttempt = {
+            if case .committing = harness.viewModel.terminalCommitState {
+                observedCommittingState = true
+            }
+            harness.viewModel.retryPendingTerminalCommit()
+        }
+
+        await deliverTerminal(to: harness)
+        store.onReplacePrimaryAttempt = nil
+
+        XCTAssertTrue(observedCommittingState)
+        assertRecordedProgress(harness.manager.progress, initialCoins: 100)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 1)
+        XCTAssertEqual(
+            harness.viewModel.terminalCommitState,
+            .committed(receiptID: matchID.uuidString.lowercased())
+        )
+        XCTAssertNil(harness.viewModel.terminalCommitFailure)
+    }
+
+    func testDuplicateTerminalAfterCommitDoesNotAwardOrLogAgain() async throws {
+        let store = FakePersistenceStore()
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000104")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        let terminalData = try terminalPayloadData(matchID: matchID, hostScore: -5, guestScore: 10)
+        harness.transport.emitRaw(terminalData, from: harness.opponent)
+        await drainTransportEvents()
+
+        harness.transport.emitRaw(terminalData, from: harness.opponent)
+        await drainTransportEvents()
+        harness.viewModel.retryPendingTerminalCommit()
+
+        assertRecordedProgress(harness.manager.progress, initialCoins: 100)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 1)
+        XCTAssertEqual(
+            harness.viewModel.terminalCommitState,
+            .committed(receiptID: matchID.uuidString.lowercased())
+        )
+        XCTAssertNil(harness.viewModel.terminalCommitFailure)
+    }
+
+    func testRecreatedViewModelWithSameReceiptDoesNotAwardAgain() async throws {
+        let store = FakePersistenceStore()
+        let firstAnalytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000105")!
+        let first = try await makeTerminalHarness(store: store, analytics: firstAnalytics, matchID: matchID)
+        await deliverTerminal(to: first)
+        assertRecordedProgress(first.manager.progress, initialCoins: 100)
+
+        let secondAnalytics = RecordingAnalytics()
+        let second = try await makeTerminalHarness(store: store, analytics: secondAnalytics, matchID: matchID)
+        await deliverTerminal(to: second)
+
+        assertRecordedProgress(second.manager.progress, initialCoins: 100)
+        XCTAssertEqual(second.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        XCTAssertEqual(firstAnalytics.multiplayerCompletions.count, 1)
+        XCTAssertEqual(secondAnalytics.multiplayerCompletions.count, 0)
+        XCTAssertEqual(
+            second.viewModel.terminalCommitState,
+            .committed(receiptID: matchID.uuidString.lowercased())
+        )
+        XCTAssertNil(second.viewModel.terminalCommitFailure)
+    }
+
+    func testConflictingTerminalFingerprintIsSurfacedAndNeverApplied() async throws {
+        let store = FakePersistenceStore()
+        let firstAnalytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000106")!
+        let first = try await makeTerminalHarness(store: store, analytics: firstAnalytics, matchID: matchID)
+        await deliverTerminal(to: first)
+        let recorded = ProgressSnapshot(first.manager.progress)
+
+        let conflictingAnalytics = RecordingAnalytics()
+        let conflicting = try await makeTerminalHarness(
+            store: store,
+            analytics: conflictingAnalytics,
+            matchID: matchID,
+            hostScore: -5,
+            guestScore: 11
+        )
+        await deliverTerminal(to: conflicting, hostScore: -5, guestScore: 11)
+
+        XCTAssertEqual(ProgressSnapshot(conflicting.manager.progress), recorded)
+        XCTAssertEqual(conflicting.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        XCTAssertEqual(firstAnalytics.multiplayerCompletions.count, 1)
+        XCTAssertEqual(conflictingAnalytics.multiplayerCompletions.count, 0)
+        assertPending(conflicting.viewModel, failure: .conflictingReceipt)
+    }
+
+    func testTerminalCommitOverflowIsRejectedWithoutPartialMutation() async throws {
+        var overflowProgress = PlayerProgress.default
+        overflowProgress.coins = Int.max
+        overflowProgress.totalCoinsEarned = Int.max
+        let store = FakePersistenceStore(primaryData: try PropertyListEncoder().encode(overflowProgress))
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000107")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        let before = ProgressSnapshot(harness.manager.progress)
+
+        await deliverTerminal(to: harness)
+
+        XCTAssertEqual(ProgressSnapshot(harness.manager.progress), before)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 0)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 0)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 0)
+        assertPending(harness.viewModel, failure: .rejected)
+    }
+
+    func testTerminalCommitAnalyticsOccursOnlyAfterDurableSave() async throws {
+        let store = FakePersistenceStore()
+        let analytics = RecordingAnalytics()
+        let matchID = UUID(uuidString: "00000000-0000-0000-0000-000000000108")!
+        let harness = try await makeTerminalHarness(store: store, analytics: analytics, matchID: matchID)
+        store.failurePoint = .replacePrimary
+
+        await deliverTerminal(to: harness)
+        XCTAssertEqual(analytics.multiplayerCompletions.count, 0)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 1)
+        assertPending(harness.viewModel, failure: .persistenceFailed)
+
+        harness.viewModel.retryPendingTerminalCommit()
+
+        assertRecordedProgress(harness.manager.progress, initialCoins: 100)
+        XCTAssertEqual(harness.manager.progress.multiplayerMatchReceipts.count, 1)
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 2)
+        XCTAssertEqual(
+            analytics.multiplayerCompletions,
+            [
+                .init(
+                    result: "won",
+                    myScore: 10,
+                    opponentScore: -5,
+                    questionsCompleted: 1,
+                    durationSeconds: 0,
+                    transportType: "test"
+                )
+            ]
+        )
+        XCTAssertEqual(
+            harness.viewModel.terminalCommitState,
+            .committed(receiptID: matchID.uuidString.lowercased())
+        )
+        XCTAssertNil(harness.viewModel.terminalCommitFailure)
+    }
+
     func testHardenedHandshakeRequiresExactContentAndCapabilities() async throws {
         let scheduler = TestScheduler()
         let coordinator = MultiplayerGameCoordinator(scheduler: scheduler)
@@ -556,6 +805,181 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         try MultiplayerMatchConfiguration(contentVersion: contentVersion, analyticsTransportLabel: "test")
     }
 
+    private func makeTerminalHarness(
+        store: FakePersistenceStore,
+        analytics: RecordingAnalytics,
+        matchID: UUID,
+        hostScore: Int = -5,
+        guestScore: Int = 10
+    ) async throws -> TerminalHarness {
+        let variant = try QuizEngineTestFixtures.variant(
+            questionResource: QuestionResource(bundle: .main, fileName: "unused")
+        )
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: store,
+            clock: TestClock(now: Date(timeIntervalSinceReferenceDate: 1_000))
+        )
+        let coordinator = MultiplayerGameCoordinator(scheduler: TestScheduler())
+        let transport = FakeTransport(localPlayer: MultiplayerPlayer(id: "guest", displayName: "Guest"))
+        let opponent = MultiplayerPlayer(id: "host", displayName: "Host")
+        coordinator.startGame(
+            transport: transport,
+            opponent: opponent,
+            role: .guest,
+            matchConfiguration: try hardenedConfiguration(contentVersion: "content-a")
+        )
+        let viewModel = MultiplayerQuizViewModel(
+            gameCoordinator: coordinator,
+            analytics: analytics,
+            progressManager: manager,
+            clock: TestClock(now: Date(timeIntervalSinceReferenceDate: 1_000)),
+            scheduler: TestScheduler(),
+            randomNumberGenerator: SeededRandomNumberGenerator(seed: 101)
+        )
+        transport.emitRaw(
+            try MultiplayerWireCodec.encode(
+                .init(
+                    matchID: matchID,
+                    sequence: 0,
+                    payload: .hello(
+                        .init(
+                            protocolVersion: MultiplayerMatchConfiguration.protocolVersion,
+                            contentVersion: "content-a",
+                            capabilities: MultiplayerMatchConfiguration.requiredQE6Capabilities
+                        )
+                    )
+                )
+            ),
+            from: opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(coordinator.matchID, matchID)
+        XCTAssertTrue(coordinator.handshakeAccepted)
+
+        viewModel.handleGameConfig(
+            GameConfigPayload(
+                questions: QuizEngineTestFixtures.questions(count: 15),
+                seed: 5
+            ),
+            localDisplayName: "Guest"
+        )
+        transport.emitRaw(
+            try MultiplayerWireCodec.encode(
+                .init(
+                    matchID: matchID,
+                    sequence: 1,
+                    payload: .questionResult(
+                        .init(
+                            questionIndex: 0,
+                            correctAnswerIndex: 0,
+                            hostCorrect: false,
+                            guestCorrect: true,
+                            hostResponseTimeMs: 200,
+                            guestResponseTimeMs: 150,
+                            hostPointsAwarded: -5,
+                            guestPointsAwarded: 10,
+                            hostTotalScore: hostScore,
+                            guestTotalScore: guestScore
+                        )
+                    )
+                )
+            ),
+            from: opponent
+        )
+        await drainTransportEvents()
+        XCTAssertEqual(viewModel.myCorrectCount, 1)
+        XCTAssertEqual(viewModel.myResponseTimes, [150])
+        XCTAssertEqual(coordinator.questionsCompleted, 1)
+
+        return TerminalHarness(
+            manager: manager,
+            coordinator: coordinator,
+            viewModel: viewModel,
+            transport: transport,
+            opponent: opponent,
+            matchID: matchID
+        )
+    }
+
+    private func deliverTerminal(
+        to harness: TerminalHarness,
+        hostScore: Int = -5,
+        guestScore: Int = 10
+    ) async {
+        do {
+            harness.transport.emitRaw(
+                try terminalPayloadData(
+                    matchID: harness.matchID,
+                    hostScore: hostScore,
+                    guestScore: guestScore
+                ),
+                from: harness.opponent
+            )
+        } catch {
+            XCTFail("Could not encode terminal payload: \(error)")
+        }
+        await drainTransportEvents()
+    }
+
+    private func terminalPayloadData(
+        matchID: UUID,
+        hostScore: Int,
+        guestScore: Int
+    ) throws -> Data {
+        try MultiplayerWireCodec.encode(
+            .init(
+                matchID: matchID,
+                sequence: 2,
+                payload: .gameEnd(
+                    .init(
+                        hostFinalScore: hostScore,
+                        guestFinalScore: guestScore,
+                        reason: .completed
+                    )
+                )
+            )
+        )
+    }
+
+    private func assertPending(
+        _ viewModel: MultiplayerQuizViewModel,
+        failure expectedFailure: ExpectedTerminalFailure,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case .pending = viewModel.terminalCommitState else {
+            return XCTFail("Expected a retained pending terminal record", file: file, line: line)
+        }
+        switch (expectedFailure, viewModel.terminalCommitFailure) {
+        case (.persistenceFailed, .persistenceFailed): break
+        case (.conflictingReceipt, .conflictingReceipt): break
+        case (.rejected, .rejected): break
+        default: XCTFail("Unexpected terminal commit failure", file: file, line: line)
+        }
+    }
+
+    private func assertRecordedProgress(
+        _ progress: PlayerProgress,
+        initialCoins: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(progress.coins, initialCoins + 1, file: file, line: line)
+        XCTAssertEqual(progress.totalCoinsEarned, initialCoins + 1, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerGamesPlayed, 1, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerGamesWon, 1, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerGamesLost, 0, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerGamesDraw, 0, file: file, line: line)
+        XCTAssertEqual(progress.bestMultiplayerScore, 10, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerWinStreak, 1, file: file, line: line)
+        XCTAssertEqual(progress.longestMultiplayerWinStreak, 1, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerTotalResponseTimeMs, 150, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerTotalQuestionsAnswered, 1, file: file, line: line)
+        XCTAssertEqual(progress.multiplayerTotalQuestionsCorrect, 1, file: file, line: line)
+    }
+
     private func drainTransportEvents() async {
         for _ in 0..<12 { await Task.yield() }
     }
@@ -597,6 +1021,54 @@ final class QuizEngineMultiplayerTests: XCTestCase {
         )
         viewModel.startRound()
         return viewModel
+    }
+}
+
+@MainActor
+private struct TerminalHarness {
+    let manager: PlayerProgressManager
+    let coordinator: MultiplayerGameCoordinator
+    let viewModel: MultiplayerQuizViewModel
+    let transport: FakeTransport
+    let opponent: MultiplayerPlayer
+    let matchID: UUID
+}
+
+private enum ExpectedTerminalFailure {
+    case persistenceFailed
+    case conflictingReceipt
+    case rejected
+}
+
+private struct ProgressSnapshot: Equatable {
+    let coins: Int
+    let totalCoinsEarned: Int
+    let gamesPlayed: Int
+    let gamesWon: Int
+    let gamesLost: Int
+    let gamesDraw: Int
+    let bestScore: Int
+    let winStreak: Int
+    let longestWinStreak: Int
+    let totalResponseTime: Int
+    let questionsAnswered: Int
+    let questionsCorrect: Int
+    let receiptCount: Int
+
+    init(_ progress: PlayerProgress) {
+        coins = progress.coins
+        totalCoinsEarned = progress.totalCoinsEarned
+        gamesPlayed = progress.multiplayerGamesPlayed
+        gamesWon = progress.multiplayerGamesWon
+        gamesLost = progress.multiplayerGamesLost
+        gamesDraw = progress.multiplayerGamesDraw
+        bestScore = progress.bestMultiplayerScore
+        winStreak = progress.multiplayerWinStreak
+        longestWinStreak = progress.longestMultiplayerWinStreak
+        totalResponseTime = progress.multiplayerTotalResponseTimeMs
+        questionsAnswered = progress.multiplayerTotalQuestionsAnswered
+        questionsCorrect = progress.multiplayerTotalQuestionsCorrect
+        receiptCount = progress.multiplayerMatchReceipts.count
     }
 }
 

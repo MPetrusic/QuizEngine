@@ -37,7 +37,7 @@ public struct MultiplayerPlayer: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
-public enum MultiplayerRole: Codable, Sendable {
+public enum MultiplayerRole: Codable, Equatable, Sendable {
     case host
     case guest
 }

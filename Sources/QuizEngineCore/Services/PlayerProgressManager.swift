@@ -1237,7 +1237,12 @@ public class PlayerProgressManager: ObservableObject {
 
         guard save() else {
             progress = snapshot
-            return .rejected
+            return .persistenceFailed(
+                lastPersistenceError ?? .writeFailed(
+                    path: persistenceStore.primaryURL.path,
+                    reason: "The multiplayer result transaction was not persisted."
+                )
+            )
         }
         return .recorded
     }

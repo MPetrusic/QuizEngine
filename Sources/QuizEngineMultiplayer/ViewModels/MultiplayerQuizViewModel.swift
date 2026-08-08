@@ -63,6 +63,8 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     @Published public private(set) var gameResult: MultiplayerGameResult?
 
     @Published public private(set) var coinsEarned = 0
+    @Published public private(set) var terminalCommitState: MultiplayerTerminalCommitState = .idle
+    @Published public private(set) var terminalCommitFailure: MultiplayerTerminalCommitFailure?
 
     // MARK: - Computed State (derived from coordinator's session state)
 
@@ -148,7 +150,6 @@ public final class MultiplayerQuizViewModel: ObservableObject {
     private var hostAnswer: AnswerPayload?
     private var guestAnswer: AnswerPayload?
     private var pendingHostSetup: (questions: [Question], localDisplayName: String)?
-    private var terminalEffectsRecorded = false
 
     // MARK: - Init
 
@@ -536,50 +537,104 @@ public final class MultiplayerQuizViewModel: ObservableObject {
             gameResult = .opponentDisconnected
         }
 
-        calculateEndOfMatchCoins(payload: payload)
-        recordTerminalEffectsIfNeeded(payload: payload)
+        prepareAndCommitTerminalRecord(payload: payload)
     }
 
-    private func recordTerminalEffectsIfNeeded(payload: GameEndPayload) {
-        guard !terminalEffectsRecorded else { return }
-        terminalEffectsRecorded = true
-
-        if let progressManager, let matchID = gameCoordinator.matchID {
-            let fingerprint = [
-                matchID.uuidString,
-                String(myScore),
-                String(opponentScore),
-                String(currentQuestionIndex + 1),
-                String(myCorrectCount),
-                String(coinsEarned),
-                String(describing: gameResult)
-            ].joined(separator: "|")
-            let outcome = progressManager.recordMultiplayerResult(
-                matchID: matchID.uuidString,
-                fingerprint: fingerprint,
-                won: gameResult == .won,
-                draw: gameResult == .draw,
-                score: myScore,
-                questionsCompleted: currentQuestionIndex + 1,
-                questionsCorrect: myCorrectCount,
-                coinsEarned: coinsEarned,
-                responseTimes: myResponseTimes
-            )
-            // The durable receipt is also the analytics idempotency boundary:
-            // a recreated view model must not report an already-applied match.
-            guard outcome == .recorded else { return }
+    private func prepareAndCommitTerminalRecord(payload: GameEndPayload) {
+        guard case .idle = terminalCommitState else { return }
+        guard let matchID = gameCoordinator.matchID,
+              let role = gameCoordinator.role else {
+            terminalCommitFailure = .missingStableMatchData
+            return
         }
-        logMatchAnalytics()
+
+        let questionsCompleted = max(0, gameCoordinator.questionsCompleted)
+        let completedResults = Array(roundResults.prefix(questionsCompleted))
+        let questionsCorrect = completedResults.reduce(into: 0) { count, result in
+            let wasCorrect = role == .host ? result.hostCorrect : result.guestCorrect
+            if wasCorrect { count += 1 }
+        }
+        let responseTimes = completedResults.map { result in
+            role == .host ? result.hostResponseTimeMs : result.guestResponseTimeMs
+        }
+        let result = Self.gameResult(for: payload, role: role)
+        let awardedCoins = MultiplayerRuleEvaluator.totalCoins(
+            correctAnswers: questionsCorrect,
+            questionsCompleted: questionsCompleted,
+            result: result,
+            isPremium: purchaseStatus?.isPremium ?? false,
+            rules: rules.multiplayer.rewards
+        )
+        let record = MultiplayerTerminalRecord(
+            matchID: matchID.uuidString.lowercased(),
+            localRole: role,
+            terminalReason: payload.reason,
+            hostFinalScore: payload.hostFinalScore,
+            guestFinalScore: payload.guestFinalScore,
+            questionsCompleted: questionsCompleted,
+            questionsCorrect: questionsCorrect,
+            awardedCoins: awardedCoins,
+            responseTimes: responseTimes
+        )
+        coinsEarned = awardedCoins
+        terminalCommitState = .pending(record)
+        commitTerminalRecord(record)
     }
 
-    private func logMatchAnalytics() {
+    /// Retries the retained terminal transaction after a retryable persistence failure.
+    public func retryPendingTerminalCommit() {
+        guard case .pending(let record) = terminalCommitState else { return }
+        if let terminalCommitFailure, !terminalCommitFailure.isRetryable { return }
+        commitTerminalRecord(record)
+    }
+
+    private func commitTerminalRecord(_ record: MultiplayerTerminalRecord) {
+        guard case .pending(let pendingRecord) = terminalCommitState,
+              pendingRecord == record else { return }
+        guard let progressManager else {
+            terminalCommitFailure = .persistenceUnavailable
+            return
+        }
+
+        terminalCommitFailure = nil
+        terminalCommitState = .committing(record)
+        let outcome = progressManager.recordMultiplayerResult(
+            matchID: record.matchID,
+            fingerprint: record.fingerprint,
+            won: record.result == .won,
+            draw: record.result == .draw,
+            score: record.localScore,
+            questionsCompleted: record.questionsCompleted,
+            questionsCorrect: record.questionsCorrect,
+            coinsEarned: record.awardedCoins,
+            responseTimes: record.responseTimes
+        )
+
+        switch outcome {
+        case .recorded:
+            terminalCommitState = .committed(receiptID: record.matchID)
+            logMatchAnalytics(record: record)
+        case .alreadyRecorded:
+            terminalCommitState = .committed(receiptID: record.matchID)
+        case .conflictingReceipt:
+            terminalCommitState = .pending(record)
+            terminalCommitFailure = .conflictingReceipt
+        case .rejected:
+            terminalCommitState = .pending(record)
+            terminalCommitFailure = .rejected
+        case .persistenceFailed(let error):
+            terminalCommitState = .pending(record)
+            terminalCommitFailure = .persistenceFailed(error)
+        }
+    }
+
+    private func logMatchAnalytics(record: MultiplayerTerminalRecord) {
         let resultString: String
-        switch gameResult {
+        switch record.result {
         case .won: resultString = "won"
         case .lost: resultString = "lost"
         case .draw: resultString = "draw"
         case .opponentDisconnected: resultString = "opponent_disconnected"
-        case .none: return
         }
 
         let duration = Self.clampedWholeSeconds(activeMatchDuration)
@@ -587,23 +642,24 @@ public final class MultiplayerQuizViewModel: ObservableObject {
         guard let transportLabel = gameCoordinator.matchConfigurationAnalyticsLabel else { return }
         analytics?.logMultiplayerMatchCompleted(
             result: resultString,
-            myScore: myScore,
-            opponentScore: opponentScore,
-            questionsCompleted: currentQuestionIndex + 1,
+            myScore: record.localScore,
+            opponentScore: record.opponentScore,
+            questionsCompleted: record.questionsCompleted,
             durationSeconds: duration,
             transportType: transportLabel
         )
     }
 
-    private func calculateEndOfMatchCoins(payload: GameEndPayload) {
-        let questionsCompleted = currentQuestionIndex + 1
-        coinsEarned = MultiplayerRuleEvaluator.totalCoins(
-            correctAnswers: myCorrectCount,
-            questionsCompleted: questionsCompleted,
-            result: gameResult,
-            isPremium: purchaseStatus?.isPremium ?? false,
-            rules: rules.multiplayer.rewards
-        )
+    private static func gameResult(
+        for payload: GameEndPayload,
+        role: MultiplayerRole
+    ) -> MultiplayerGameResult {
+        guard payload.reason == .completed else { return .opponentDisconnected }
+        let localScore = role == .host ? payload.hostFinalScore : payload.guestFinalScore
+        let opponentScore = role == .host ? payload.guestFinalScore : payload.hostFinalScore
+        if localScore > opponentScore { return .won }
+        if localScore < opponentScore { return .lost }
+        return .draw
     }
 
     private func updateCorrectAnswerCoins(questionsCompleted: Int) {
