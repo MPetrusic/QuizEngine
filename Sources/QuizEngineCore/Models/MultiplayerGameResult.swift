@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MultiplayerGameResult: Sendable {
+public enum MultiplayerGameResult: Equatable, Sendable {
     case won
     case lost
     case draw

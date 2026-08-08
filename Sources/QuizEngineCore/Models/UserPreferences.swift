@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct UserPreferences: Codable {
+public struct UserPreferences: Codable, Equatable, Sendable {
     public var hapticsEnabled: Bool
 
     public init(hapticsEnabled: Bool) {

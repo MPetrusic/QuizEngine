@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PowerUp: CaseIterable, Sendable {
+public enum PowerUp: String, Codable, CaseIterable, Sendable {
     case fiftyFifty
     case skipQuestion
     case timeFreeze
@@ -36,5 +36,28 @@ public enum PowerUp: CaseIterable, Sendable {
     /// Power-ups that appear in the standard bar (always visible)
     public static var standardPowerUps: [PowerUp] {
         [.fiftyFifty, .skipQuestion, .timeFreeze]
+    }
+}
+
+/// The wallet source that funded a power-up activation.
+public enum PowerUpFundingSource: String, Codable, Equatable, Sendable {
+    case freeCredit
+    case coins
+}
+
+/// Durable funding details for a successfully consumed power-up.
+public struct PowerUpSpendResult: Equatable, Sendable {
+    public let powerUp: PowerUp
+    public let fundingSource: PowerUpFundingSource
+    public let coinsSpent: Int
+
+    public init(
+        powerUp: PowerUp,
+        fundingSource: PowerUpFundingSource,
+        coinsSpent: Int
+    ) {
+        self.powerUp = powerUp
+        self.fundingSource = fundingSource
+        self.coinsSpent = coinsSpent
     }
 }

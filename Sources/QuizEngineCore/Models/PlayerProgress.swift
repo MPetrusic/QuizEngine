@@ -178,7 +178,7 @@ public struct HourlyPerformance: Codable, Equatable, Sendable {
 // MARK: - Category Statistics
 
 /// Tracks user progress within a specific category
-public struct CategoryStat: Codable, Sendable {
+public struct CategoryStat: Codable, Equatable, Sendable {
     /// Total number of questions answered in this category (includes wrong answers)
     public var questionsAnswered: Int
 
@@ -232,7 +232,30 @@ public struct CategoryStat: Codable, Sendable {
 
 // MARK: - Player Progress
 
-public struct PlayerProgress: Codable, Sendable {
+/// A durable receipt for an already-applied multiplayer result.
+///
+/// The receipt is deliberately value-only so Core does not depend on the
+/// multiplayer product. Its fingerprint prevents a reused match identifier
+/// from silently changing a player's statistics or reward.
+public struct MultiplayerMatchReceipt: Codable, Equatable, Sendable {
+    public let matchID: String
+    public let fingerprint: String
+
+    public init(matchID: String, fingerprint: String) {
+        self.matchID = matchID
+        self.fingerprint = fingerprint
+    }
+}
+
+public enum MultiplayerResultRecordingOutcome: Equatable, Sendable {
+    case recorded
+    case alreadyRecorded
+    case conflictingReceipt
+    case rejected
+    case persistenceFailed(PersistenceError)
+}
+
+public struct PlayerProgress: Codable, Equatable, Sendable {
     public var coins: Int
     public var currentStreak: Int
     public var longestStreak: Int
@@ -242,6 +265,9 @@ public struct PlayerProgress: Codable, Sendable {
     // Power-up usage tracking (resets each session, not persisted meaningfully but included for completeness)
     public var totalCoinsEarned: Int
     public var totalCoinsSpent: Int
+
+    /// Free activations available for each power-up. Missing entries mean zero credits.
+    public var powerUpCredits: [PowerUp: Int]
 
     // MARK: - Phase 2 Category Progress Tracking
 
@@ -342,6 +368,10 @@ public struct PlayerProgress: Codable, Sendable {
     public var multiplayerTotalQuestionsAnswered: Int
     public var multiplayerTotalQuestionsCorrect: Int
 
+    /// Bounded durable history used to make multiplayer terminal rewards
+    /// idempotent across presentation retries and process recreation.
+    public var multiplayerMatchReceipts: [MultiplayerMatchReceipt]
+
     // MARK: - Memberwise Init
 
     public init(
@@ -383,7 +413,9 @@ public struct PlayerProgress: Codable, Sendable {
         longestMultiplayerWinStreak: Int = 0,
         multiplayerTotalResponseTimeMs: Int = 0,
         multiplayerTotalQuestionsAnswered: Int = 0,
-        multiplayerTotalQuestionsCorrect: Int = 0
+        multiplayerTotalQuestionsCorrect: Int = 0,
+        multiplayerMatchReceipts: [MultiplayerMatchReceipt] = [],
+        powerUpCredits: [PowerUp: Int] = [:]
     ) {
         self.coins = coins
         self.currentStreak = currentStreak
@@ -424,6 +456,8 @@ public struct PlayerProgress: Codable, Sendable {
         self.multiplayerTotalResponseTimeMs = multiplayerTotalResponseTimeMs
         self.multiplayerTotalQuestionsAnswered = multiplayerTotalQuestionsAnswered
         self.multiplayerTotalQuestionsCorrect = multiplayerTotalQuestionsCorrect
+        self.multiplayerMatchReceipts = multiplayerMatchReceipts
+        self.powerUpCredits = powerUpCredits
     }
 
     public static let `default` = PlayerProgress(
@@ -455,8 +489,16 @@ public struct PlayerProgress: Codable, Sendable {
         previousAppOpenDate: nil,
         currentPlayStreak: 0,
         longestPlayStreak: 0,
-        lastPlayedDate: nil
+        lastPlayedDate: nil,
+        powerUpCredits: [:]
     )
+
+    public static func fresh(initialCoins: Int) -> PlayerProgress {
+        var progress = PlayerProgress.default
+        progress.coins = initialCoins
+        progress.totalCoinsEarned = initialCoins
+        return progress
+    }
 
     // MARK: - Custom Codable (Backward Compatibility)
 
@@ -474,6 +516,14 @@ public struct PlayerProgress: Codable, Sendable {
         lastDailyRewardClaimedDate = try container.decodeIfPresent(Date.self, forKey: .lastDailyRewardClaimedDate)
         totalCoinsEarned = try container.decodeIfPresent(Int.self, forKey: .totalCoinsEarned) ?? 100
         totalCoinsSpent = try container.decodeIfPresent(Int.self, forKey: .totalCoinsSpent) ?? 0
+        powerUpCredits = try container.decodeIfPresent([PowerUp: Int].self, forKey: .powerUpCredits) ?? [:]
+        guard powerUpCredits.values.allSatisfy({ $0 >= 0 }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .powerUpCredits,
+                in: container,
+                debugDescription: "Power-up credit balances cannot be negative."
+            )
+        }
 
         // Category progress
         categoryStats = try container.decodeIfPresent([String: CategoryStat].self, forKey: .categoryStats) ?? [:]
@@ -522,26 +572,28 @@ public struct PlayerProgress: Codable, Sendable {
         multiplayerTotalResponseTimeMs = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalResponseTimeMs) ?? 0
         multiplayerTotalQuestionsAnswered = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalQuestionsAnswered) ?? 0
         multiplayerTotalQuestionsCorrect = try container.decodeIfPresent(Int.self, forKey: .multiplayerTotalQuestionsCorrect) ?? 0
+        multiplayerMatchReceipts = try container.decodeIfPresent([MultiplayerMatchReceipt].self, forKey: .multiplayerMatchReceipts) ?? []
+        guard multiplayerMatchReceipts.count <= 256,
+              Set(multiplayerMatchReceipts.map(\.matchID)).count == multiplayerMatchReceipts.count,
+              multiplayerMatchReceipts.allSatisfy({ !$0.matchID.isEmpty && !$0.fingerprint.isEmpty }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .multiplayerMatchReceipts,
+                in: container,
+                debugDescription: "Multiplayer match receipts must be unique, bounded, and non-empty."
+            )
+        }
     }
 
     // MARK: - Date Formatting
 
-    /// Standard date formatter for daily stats keys
-    public static let dailyStatsDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-        return formatter
-    }()
-
     /// Returns the date key for today
     public static var todayKey: String {
-        dailyStatsDateFormatter.string(from: Date())
+        dateKey(for: Date(), calendar: .current)
     }
 
     /// Returns the current hour (0-23)
     public static var currentHour: Int {
-        Calendar.current.component(.hour, from: Date())
+        hour(for: Date(), calendar: .current)
     }
 
     /// Returns a stable local-calendar key for daily statistics.
@@ -554,20 +606,31 @@ public struct PlayerProgress: Codable, Sendable {
         return formatter.string(from: date)
     }
 
+    /// Returns the local hour for an explicitly supplied date and calendar.
+    public static func hour(for date: Date, calendar: Calendar) -> Int {
+        calendar.component(.hour, from: date)
+    }
+
     // MARK: - Streak Helpers
 
     public func dailyRewardAmount() -> Int {
-        // Use the centralized streak tier definitions
-        if let tier = allStreakTiers.first(where: { $0.contains(day: currentStreak) }) {
+        dailyRewardAmount(using: allStreakTiers)
+    }
+
+    public func dailyRewardAmount(using tiers: [StreakTier]) -> Int {
+        if let tier = tiers.first(where: { $0.contains(day: currentStreak) }) {
             return tier.reward
         }
-        // Fallback to max tier reward (should never happen with proper tier definitions)
-        return allStreakTiers.last?.reward ?? 50
+        return tiers.last?.reward ?? 0
     }
 
     /// Returns the index of the current streak tier (0-based)
     public func currentStreakTierIndex() -> Int {
-        allStreakTiers.firstIndex { $0.contains(day: currentStreak) } ?? 0
+        currentStreakTierIndex(using: allStreakTiers)
+    }
+
+    public func currentStreakTierIndex(using tiers: [StreakTier]) -> Int {
+        tiers.firstIndex { $0.contains(day: currentStreak) } ?? 0
     }
 
     public func canClaimDailyReward(
@@ -577,6 +640,7 @@ public struct PlayerProgress: Codable, Sendable {
         guard let lastClaimed = lastDailyRewardClaimedDate else {
             return true
         }
+        guard now >= lastClaimed else { return false }
         return !calendar.isDate(lastClaimed, inSameDayAs: now)
     }
 
@@ -592,6 +656,8 @@ public struct PlayerProgress: Codable, Sendable {
             lastAppOpenDate = today
             return
         }
+
+        guard today >= lastOpen else { return }
 
         if calendar.isDate(lastOpen, inSameDayAs: today) {
             // Already opened today, no change

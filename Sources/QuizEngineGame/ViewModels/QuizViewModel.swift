@@ -7,7 +7,6 @@
 
 import Combine
 import Foundation
-import SwiftUI
 import QuizEngineCore
 
 @MainActor
@@ -21,13 +20,27 @@ public class QuizViewModel: ObservableObject {
     private let clock: any QuizEngineClock
     private let calendar: Calendar
     private let scheduler: any QuizEngineScheduler
+    public let rules: QuizRulesConfiguration
     private var randomNumberGenerator: any RandomNumberGenerator
+    private var sessionReducer = SoloQuizSessionReducer()
     private var scheduledTasks: [ScheduledTaskKind: ScheduledTaskRegistration] = [:]
+    private var timerTask: (any QuizEngineScheduledTask)?
+    private var timerGeneration: UInt = 0
+    private var timerSegmentStartTime: Date?
+    private var timerSegmentStartingRemaining: TimeInterval
+    private var timerRemainingSeconds: TimeInterval
+    private var timerIsRunning = false
+    private var sessionTimingPaused = false
+    private var timerWasRunningBeforePause = false
+    private var freezeSegmentStartTime: Date?
+    private var freezeSegmentStartingRemaining: TimeInterval = 0
+    private var freezeRemainingSeconds: TimeInterval = 0
+    private static let timerPrecisionTolerance: TimeInterval = 0.000_001
 
     @Published public private(set) var questionData: [Question] = []
     @Published public private(set) var questionNumber = -1
     @Published public private(set) var score = 0
-    @Published public private(set) var livesRemaining = 3
+    @Published public private(set) var livesRemaining: Int
     @Published public private(set) var shouldShowCorrectView = false
     @Published public private(set) var shouldShowWrongAnswerView = false
     @Published public private(set) var shouldShowRewardProposalView = false
@@ -35,16 +48,30 @@ public class QuizViewModel: ObservableObject {
     @Published public private(set) var shouldShowAnswerDescription = false
     @Published public private(set) var shouldShowStreakView = false
     @Published public var shouldChangeBackground: Bool = false
-    @Published public var timeRemaining = 15
+    @Published public var timeRemaining: Int
     @Published public var shouldAllowTap = true
     @Published public var shouldPresentResultView = false
     @Published public private(set) var timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// Rule state projected for SwiftUI and non-UI hosts. Presentation flags below
+    /// remain source-compatible bridges and do not grant rule permissions.
+    @Published public private(set) var sessionState = SoloQuizSessionState(
+        generation: 0,
+        questionIndex: nil,
+        phase: .idle
+    )
+    /// Undelivered rule effects. Consume these from a presentation host when it
+    /// needs to animate or announce a transition.
+    @Published public private(set) var sessionEffects: [SoloQuizSessionEffect] = []
 
-    public var isRewardAdAvailable: Bool { rewardAd?.isLoaded ?? false }
+    public var isRewardAdAvailable: Bool {
+        rules.extraLife.allowsRewardedAd
+            && extraLifeUseCount < rules.extraLife.maximumUsesPerSession
+            && (rewardAd?.isLoaded ?? false)
+    }
 
     private var interstitialAdWasShown = false
     private var adRewardWasShown = false
-    private var userDidEarnAward = false
+    private var rewardedAdRequestGeneration: UInt?
     @Published public var correctAnswersInRow = 0
     private var gameMode: GameMode
     private var numberOfQuestions = 0
@@ -59,7 +86,10 @@ public class QuizViewModel: ObservableObject {
     @Published public private(set) var hiddenAnswerIndices: Set<Int> = []
     @Published public private(set) var isTimeFrozen = false
     @Published public private(set) var hasActiveStreakShield = false
-    private var extraLifeUsed = false
+    @Published public private(set) var lastPowerUpFunding: PowerUpSpendResult?
+    private var extraLifeUseCount = 0
+    private var powerUpUseCounts: [PowerUp: Int] = [:]
+    private var powerUpsUsedOnCurrentQuestion: Set<PowerUp> = []
 
     // MARK: - Phase 3 Session Statistics Tracking
 
@@ -109,10 +139,44 @@ public class QuizViewModel: ObservableObject {
         var task: (any QuizEngineScheduledTask)?
     }
 
+    public convenience init(
+        questions: [Question]?,
+        gameMode: GameMode,
+        selectedCategory: String?,
+        analytics: (any AnalyticsProvider)? = nil,
+        interstitialAd: (any InterstitialAdProvider)? = nil,
+        rewardAd: (any RewardAdProvider)? = nil,
+        leaderboard: (any LeaderboardProvider)? = nil,
+        purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        haptics: (any HapticProvider)? = nil,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        calendar: Calendar = .current,
+        scheduler: any QuizEngineScheduler = MainQueueQuizEngineScheduler(),
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
+        self.init(
+            questions: questions,
+            gameMode: gameMode,
+            selectedCategory: selectedCategory,
+            rules: .serbianCompatible,
+            analytics: analytics,
+            interstitialAd: interstitialAd,
+            rewardAd: rewardAd,
+            leaderboard: leaderboard,
+            purchaseStatus: purchaseStatus,
+            haptics: haptics,
+            clock: clock,
+            calendar: calendar,
+            scheduler: scheduler,
+            randomNumberGenerator: randomNumberGenerator
+        )
+    }
+
     public init(
         questions: [Question]?,
         gameMode: GameMode,
         selectedCategory: String?,
+        rules: QuizRulesConfiguration,
         analytics: (any AnalyticsProvider)? = nil,
         interstitialAd: (any InterstitialAdProvider)? = nil,
         rewardAd: (any RewardAdProvider)? = nil,
@@ -146,6 +210,11 @@ public class QuizViewModel: ObservableObject {
         }
         self.gameMode = gameMode
         self.selectedCategory = selectedCategory
+        self.rules = rules
+        self.livesRemaining = rules.solo.startingLives
+        self.timeRemaining = rules.solo.timerDurationSeconds
+        self.timerSegmentStartingRemaining = TimeInterval(rules.solo.timerDurationSeconds)
+        self.timerRemainingSeconds = TimeInterval(rules.solo.timerDurationSeconds)
         self.analytics = analytics
         self.interstitialAd = interstitialAd
         self.rewardAd = rewardAd
@@ -157,14 +226,15 @@ public class QuizViewModel: ObservableObject {
         self.scheduler = scheduler
         self.randomNumberGenerator = initialRandomNumberGenerator
         self.advancedSessionStats = PlayerProgressManager.SessionStatistics(
-            calendar: calendar,
-            now: clock.now
+            clock: clock,
+            calendar: calendar
         )
 
         // Log game start event
         analytics?.logGameStarted(category: selectedCategory, mode: gameMode)
 
         goToNextQuestion()
+        startTimer()
         rewardAd?.load()
         interstitialAd?.load()
     }
@@ -172,11 +242,12 @@ public class QuizViewModel: ObservableObject {
     public func showWrongAnswerView() {
         stopTimer()
         schedule(.wrongAnswerAdvance, after: 1.0) {
-            self.shouldAllowTap = true
+            guard case .feedback(let outcome) = self.sessionState.phase,
+                  outcome == .wrong || outcome == .timedOut else { return }
 
             guard self.livesRemaining > 0 else {
-                if self.extraLifeUsed {
-                    self.endGame()
+                if self.extraLifeUseCount >= self.rules.extraLife.maximumUsesPerSession {
+                    self.endGame(reason: .exhaustedLives)
                 } else {
                     self.showRewardProposalView()
                 }
@@ -193,80 +264,83 @@ public class QuizViewModel: ObservableObject {
 
         // Delay showing the description to let the wrong answer animation play first
         schedule(.description, after: 1.0) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                self.shouldShowAnswerDescription = true
-            }
+            guard !self.publish(self.sessionReducer.showDescription()) else { return }
+            self.shouldShowAnswerDescription = true
         }
     }
 
     public func hideDescriptionView() {
-        self.shouldAllowTap = true
-        withAnimation {
-            shouldShowAnswerDescription = false
-            self.goToNextQuestion()
-        }
-
+        guard case .awaitingDescription = sessionState.phase else { return }
+        shouldShowAnswerDescription = false
         if livesRemaining > 0 {
+            goToNextQuestion()
             startTimer()
-        }
-
-        if livesRemaining == 0 {
-            endGame()
+        } else {
+            endGame(reason: .exhaustedLives)
         }
     }
 
     public func showLifeGrantedView() {
-        withAnimation {
-            shouldShowLifeGrantedView = true
-        }
+        shouldShowLifeGrantedView = true
         schedule(.lifeGranted, after: 1.0) {
-            self.shouldAllowTap = true
-            withAnimation {
-                self.shouldShowLifeGrantedView = false
-            }
-
+            guard case .lifeGranted = self.sessionState.phase else { return }
+            self.shouldShowLifeGrantedView = false
             self.goToNextQuestion()
+            self.startTimer()
         }
     }
 
     public func showStreakView() {
-        withAnimation {
-            shouldShowStreakView = true
-        }
+        shouldShowStreakView = true
 
         schedule(.streak, after: 1.0) {
-            withAnimation {
-                self.shouldShowStreakView = false
-            }
+            self.shouldShowStreakView = false
         }
     }
 
     public func startTimer() {
         // No timer in practice mode - learning at your own pace
-        guard !isPracticeMode else { return }
+        guard !isPracticeMode,
+              !sessionTimingPaused,
+              !isTimeFrozen,
+              !shouldPresentResultView,
+              timerRemainingSeconds > 0,
+              !timerIsRunning else { return }
+        timerSegmentStartTime = clock.now
+        timerSegmentStartingRemaining = timerRemainingSeconds
+        timerIsRunning = true
+        timerGeneration &+= 1
         timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+        scheduleTimerTick(generation: timerGeneration)
     }
 
     public func stopTimer() {
+        synchronizeTimer(allowTimeout: false)
+        timerIsRunning = false
+        timerGeneration &+= 1
+        timerSegmentStartTime = nil
+        timerTask?.cancel()
+        timerTask = nil
         timer.upstream.connect().cancel()
     }
 
     public func goToNextQuestion() {
+        guard !sessionState.isTerminal else { return }
         resetPowerUpsForQuestion()
-        withAnimation {
-            guard questionNumber < numberOfQuestions - 1 else {
-                endGame()
-                return
-            }
-
-            questionNumber += 1
-
-            // Phase 4A: Track question as seen for content freshness
-            trackCurrentQuestionAsSeen()
-
-            // Phase E8: Record when question is displayed for response time tracking
-            questionDisplayTime = clock.now
+        guard questionNumber < numberOfQuestions - 1 else {
+            endGame(reason: questionData.isEmpty ? .emptySession : .completed)
+            return
         }
+
+        questionNumber += 1
+        _ = publish(sessionReducer.advance(to: questionNumber))
+        shouldAllowTap = sessionState.acceptsAnswerInput
+
+        // Phase 4A: Track question as seen for content freshness
+        trackCurrentQuestionAsSeen()
+
+        // Phase E8: Record when question is displayed for response time tracking
+        questionDisplayTime = clock.now
     }
 
     /// Tracks the current question as seen (Phase 4A)
@@ -278,14 +352,23 @@ public class QuizViewModel: ObservableObject {
     }
 
     public func updateRemainingTime() {
-        timeRemaining = 15
+        timerRemainingSeconds = TimeInterval(rules.solo.timerDurationSeconds)
+        timerSegmentStartingRemaining = timerRemainingSeconds
+        timerSegmentStartTime = timerIsRunning ? clock.now : nil
+        timeRemaining = rules.solo.timerDurationSeconds
     }
 
     public func increaseScoreForCorrectAnswer() {
+        synchronizeTimer()
+        guard !publish(sessionReducer.lockAnswer(.correct)) else { return }
         isTimeFrozen = false
         stopTimer()
         correctAnswersInRow += 1
-        score += correctAnswersInRow > 5 ? 20 : 10
+        let scoring = rules.solo.scoring
+        let points = correctAnswersInRow > scoring.streakThreshold
+            ? scoring.streakCorrectPoints
+            : scoring.baseCorrectPoints
+        score = Self.saturatingAdd(score, points)
         awardCoinsForCorrectAnswer()
         runStreakAchievedLogicIfNeeded()
 
@@ -313,12 +396,10 @@ public class QuizViewModel: ObservableObject {
         }
 
         schedule(.nextQuestion, after: 1.0) {
+            guard case .feedback(.correct) = self.sessionState.phase else { return }
             self.updateRemainingTime()
+            self.goToNextQuestion()
             self.startTimer()
-            self.shouldAllowTap = true
-            withAnimation {
-                self.goToNextQuestion()
-            }
         }
     }
 
@@ -327,26 +408,41 @@ public class QuizViewModel: ObservableObject {
         if purchaseStatus?.isPremium ?? false { return false }
         if purchaseStatus?.adsRemoved ?? false { return false }
 
-        // 40% chance (2 in 5 sessions)
-        return Int.random(in: 0..<5, using: &randomNumberGenerator) < 2
+        let eligibility = rules.soloInterstitialEligibility
+        guard eligibility.numerator > 0 else { return false }
+        return Int.random(in: 0..<eligibility.denominator, using: &randomNumberGenerator) < eligibility.numerator
     }
 
     public func restartGame() {
+        stopTimer()
         cancelScheduledTasks()
-        startTimer()
-        updateRemainingTime()
+        // A host that has not consumed feedback from the old generation must
+        // never animate it after this fresh session starts.
+        sessionEffects.removeAll(keepingCapacity: true)
         questionData = questionData.shuffled(using: &randomNumberGenerator)
         questionNumber = 0
+        questionDisplayTime = clock.now
         score = 0
-        livesRemaining = 3
+        livesRemaining = rules.solo.startingLives
         coinsEarnedThisSession = 0
         usedPowerUps = []
         hiddenAnswerIndices = []
         isTimeFrozen = false
         hasActiveStreakShield = false
-        extraLifeUsed = false
+        lastPowerUpFunding = nil
+        extraLifeUseCount = 0
+        powerUpUseCounts = [:]
+        powerUpsUsedOnCurrentQuestion = []
         correctAnswersInRow = 0
+        _ = publish(sessionReducer.restart(questionIndex: questionData.isEmpty ? nil : 0))
+        shouldAllowTap = sessionState.acceptsAnswerInput
         shouldChangeBackground = false
+        shouldShowCorrectView = false
+        shouldShowWrongAnswerView = false
+        shouldShowRewardProposalView = false
+        shouldShowLifeGrantedView = false
+        shouldShowAnswerDescription = false
+        shouldShowStreakView = false
         correctAnswersThisSession = 0
         maxStreakThisSession = 0
         questionsAnsweredThisSession = 0
@@ -354,15 +450,34 @@ public class QuizViewModel: ObservableObject {
         shouldPresentResultView = false
         adRewardWasShown = false
         interstitialAdWasShown = false
+        rewardedAdRequestGeneration = nil
         advancedSessionStats = PlayerProgressManager.SessionStatistics(
-            calendar: calendar,
-            now: clock.now
+            clock: clock,
+            calendar: calendar
         )
+        sessionTimingPaused = false
+        timerWasRunningBeforePause = false
+        freezeSegmentStartTime = nil
+        freezeSegmentStartingRemaining = 0
+        freezeRemainingSeconds = 0
+        guard !questionData.isEmpty else {
+            shouldPresentResultView = true
+            return
+        }
+        updateRemainingTime()
+        trackCurrentQuestionAsSeen()
+        startTimer()
         interstitialAd?.load()
         rewardAd?.load()
     }
 
     public func reduceLivesRemaining() {
+        synchronizeTimer()
+        guard !publish(sessionReducer.lockAnswer(.wrong)) else { return }
+        applyWrongAnswer()
+    }
+
+    private func applyWrongAnswer() {
         isTimeFrozen = false
         questionsAnsweredThisSession += 1
 
@@ -375,9 +490,7 @@ public class QuizViewModel: ObservableObject {
             // Streak preserved! Don't reset correctAnswersInRow
         } else {
             correctAnswersInRow = 0
-            withAnimation(.easeInOut(duration: 0.8)) {
-                shouldChangeBackground = false
-            }
+            shouldChangeBackground = false
         }
 
         // Track the missed question for practice mode review
@@ -414,6 +527,17 @@ public class QuizViewModel: ObservableObject {
     }
 
     public func endGame() {
+        endGame(reason: .completed)
+    }
+
+    /// Ends a completed session exactly once. Repeated terminal callbacks do not
+    /// duplicate analytics, progress, achievements, rewards, or leaderboard work.
+    public func endGame(reason: SoloQuizSessionState.TerminalReason) {
+        guard !sessionState.isTerminal else { return }
+        // Terminal presentation supersedes any unconsumed feedback from the
+        // question that completed or exhausted the session.
+        sessionEffects.removeAll(keepingCapacity: true)
+        guard !publish(sessionReducer.terminate(reason)) else { return }
         cancelScheduledTasks()
         hideRewardProposalView()
         stopTimer()
@@ -470,23 +594,58 @@ public class QuizViewModel: ObservableObject {
         }
     }
 
+    /// Explicit cancellation path for a host that leaves an active session.
+    /// Exiting is terminal but deliberately does not turn an incomplete run into
+    /// a completed-progress/reward event.
+    public func exitGame() {
+        guard !sessionState.isTerminal else { return }
+        sessionEffects.removeAll(keepingCapacity: true)
+        guard !publish(sessionReducer.terminate(.exited)) else { return }
+        cancelScheduledTasks()
+        stopTimer()
+        shouldShowRewardProposalView = false
+        shouldPresentResultView = false
+    }
+
     public func showRewardAd() {
-        guard !adRewardWasShown else {
-            shouldPresentResultView = true
+        // A provider may receive two UI requests while its first completion is
+        // outstanding. The first request owns this generation; the duplicate is
+        // a no-op, not a terminal failure.
+        guard rewardedAdRequestGeneration == nil else { return }
+        guard rules.extraLife.allowsRewardedAd,
+              extraLifeUseCount < rules.extraLife.maximumUsesPerSession else {
+            endGame(reason: .exhaustedLives)
             return
         }
+        if sessionState.acceptsAnswerInput {
+            _ = publish(sessionReducer.offerExtraLife())
+            shouldShowRewardProposalView = true
+            stopTimer()
+        }
+        guard case .awaitingExtraLife = sessionState.phase,
+              rewardAd?.isLoaded == true else {
+            endGame(reason: .exhaustedLives)
+            return
+        }
+        let requestGeneration = sessionState.generation
+        rewardedAdRequestGeneration = requestGeneration
         rewardAd?.show { [weak self] userDidEarnReward in
-            self?.adRewardWasShown = true
+            guard let self,
+                  self.rewardedAdRequestGeneration == requestGeneration,
+                  self.sessionState.generation == requestGeneration,
+                  case .awaitingExtraLife = self.sessionState.phase else { return }
+            self.rewardedAdRequestGeneration = nil
+            self.adRewardWasShown = true
             guard userDidEarnReward else {
-                self?.endGame()
+                self.endGame(reason: .exhaustedLives)
                 return
             }
-            self?.extraLifeUsed = true
-            self?.shouldShowRewardProposalView = false
-            self?.analytics?.logExtraLifeUsed(method: .ad)
-            self?.incrementLives()
-            self?.updateRemainingTime()
-            self?.startTimer()
+            self.extraLifeUseCount += 1
+            self.shouldShowRewardProposalView = false
+            self.analytics?.logExtraLifeUsed(method: .ad)
+            _ = self.publish(self.sessionReducer.grantExtraLife())
+            self.incrementLives()
+            self.updateRemainingTime()
         }
     }
 
@@ -503,32 +662,33 @@ public class QuizViewModel: ObservableObject {
     public func updateRemainingTimeAndHandleNavigationIfNeeded() {
         // No timer logic in practice mode
         guard !isPracticeMode else { return }
+        synchronizeTimer()
+    }
 
-        if timeRemaining > 0 {
-            timeRemaining -= 1
+    /// Pauses rule-critical question and freeze timing without counting background duration.
+    public func handleAppBackgrounded() {
+        guard !isPracticeMode, !shouldPresentResultView, !sessionTimingPaused else { return }
+        timerWasRunningBeforePause = timerIsRunning
+        stopTimer()
+        pauseFreezeIfNeeded()
+        sessionTimingPaused = true
+    }
+
+    /// Resumes only the timing that was active before backgrounding.
+    public func handleAppForegrounded() {
+        guard sessionTimingPaused, !shouldPresentResultView else { return }
+        sessionTimingPaused = false
+        if isTimeFrozen {
+            resumeFreezeIfNeeded()
+        } else if timerWasRunningBeforePause {
+            startTimer()
         }
-
-        // Guard against shouldAllowTap to prevent double life-loss when the timer
-        // expires in the same run loop cycle as a wrong-answer tap.
-        if timeRemaining == 0 && livesRemaining > 0 && shouldAllowTap {
-            shouldAllowTap = false
-            reduceLivesRemaining()
-            updateRemainingTime()
-            haptics?.notification(.error)
-            withAnimation {
-                shouldShowWrongAnswerView = true
-            }
-
-            schedule(.wrongAnswerOverlay, after: 1.0) {
-                withAnimation {
-                    self.shouldShowWrongAnswerView = false
-                }
-            }
-        }
+        timerWasRunningBeforePause = false
     }
 
     private func showRewardProposalView() {
         guard gameMode == .singlePlayer else { return }
+        guard !publish(sessionReducer.offerExtraLife()) else { return }
         shouldShowRewardProposalView = true
         stopTimer()
     }
@@ -546,29 +706,47 @@ public class QuizViewModel: ObservableObject {
     // MARK: - Coin Logic
 
     private func awardCoins(_ amount: Int) {
-        coinsEarnedThisSession += amount
+        coinsEarnedThisSession = Self.saturatingAdd(coinsEarnedThisSession, amount)
         progressManager?.addCoins(amount)
     }
 
     private func awardCoinsForCorrectAnswer() {
-        awardCoins(1)
+        awardCoins(rules.economy.correctAnswerCoinReward)
     }
 
     // MARK: - Power-ups
 
+    public func powerUpCost(for powerUp: PowerUp) -> Int {
+        rules.powerUps.rule(for: powerUp)?.coinCost ?? powerUp.cost
+    }
+
+    public var extraLifeCoinCost: Int {
+        rules.extraLife.coinCost
+    }
+
     public func canUsePowerUp(_ powerUp: PowerUp) -> Bool {
-        guard let manager = progressManager else { return false }
-        return !usedPowerUps.contains(powerUp) && manager.canAfford(powerUp.cost)
+        synchronizeTimer()
+        guard sessionState.acceptsAnswerInput,
+              let manager = progressManager,
+              let rule = rules.powerUps.rule(for: powerUp),
+              rule.isEnabled,
+              rule.allowedModes.contains(gameMode),
+              !powerUpsUsedOnCurrentQuestion.contains(powerUp),
+              powerUpUseCounts[powerUp, default: 0] < rule.maximumUsesPerSession else {
+            return false
+        }
+        return manager.canFundPowerUp(powerUp)
     }
 
     public func useFiftyFifty() {
         guard canUsePowerUp(.fiftyFifty) else { return }
         guard questionNumber >= 0 else { return }
-        guard progressManager?.spendCoins(PowerUp.fiftyFifty.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.fiftyFifty) else { return }
 
         usedPowerUps.insert(.fiftyFifty)
-        progressManager?.recordPowerUpUsed(.fiftyFifty)
-        analytics?.logPowerUpUsed(type: .fiftyFifty, coinsSpent: PowerUp.fiftyFifty.cost)
+        powerUpUseCounts[.fiftyFifty, default: 0] += 1
+        powerUpsUsedOnCurrentQuestion.insert(.fiftyFifty)
+        recordPowerUpFunding(funding)
 
         let currentAnswers = questionData[questionNumber].answers
         let wrongIndices = currentAnswers.enumerated()
@@ -576,73 +754,84 @@ public class QuizViewModel: ObservableObject {
             .map { $0.offset }
             .shuffled(using: &randomNumberGenerator)
 
-        let toHide = Array(wrongIndices.prefix(2))
-        withAnimation {
-            hiddenAnswerIndices = Set(toHide)
-        }
+        let toHide = Array(wrongIndices.prefix(rules.powerUps.fiftyFiftyIncorrectAnswersRemoved))
+        hiddenAnswerIndices = Set(toHide)
     }
 
     public func useSkipQuestion() {
         guard canUsePowerUp(.skipQuestion) else { return }
-        guard progressManager?.spendCoins(PowerUp.skipQuestion.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.skipQuestion) else { return }
+        guard !publish(sessionReducer.lockAnswer(.skipped)) else { return }
 
         usedPowerUps.insert(.skipQuestion)
-        progressManager?.recordPowerUpUsed(.skipQuestion)
-        analytics?.logPowerUpUsed(type: .skipQuestion, coinsSpent: PowerUp.skipQuestion.cost)
+        powerUpUseCounts[.skipQuestion, default: 0] += 1
+        powerUpsUsedOnCurrentQuestion.insert(.skipQuestion)
+        recordPowerUpFunding(funding)
         stopTimer()
         updateRemainingTime()
 
         schedule(.skipQuestion, after: 0.3) {
+            guard case .feedback(.skipped) = self.sessionState.phase else { return }
+            self.goToNextQuestion()
             self.startTimer()
-            withAnimation {
-                self.goToNextQuestion()
-            }
         }
     }
 
     public func useTimeFreeze() {
         guard canUsePowerUp(.timeFreeze) else { return }
-        guard progressManager?.spendCoins(PowerUp.timeFreeze.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.timeFreeze) else { return }
 
         usedPowerUps.insert(.timeFreeze)
-        progressManager?.recordPowerUpUsed(.timeFreeze)
-        analytics?.logPowerUpUsed(type: .timeFreeze, coinsSpent: PowerUp.timeFreeze.cost)
+        powerUpUseCounts[.timeFreeze, default: 0] += 1
+        powerUpsUsedOnCurrentQuestion.insert(.timeFreeze)
+        recordPowerUpFunding(funding)
         isTimeFrozen = true
         stopTimer()
-
-        schedule(.timeFreeze, after: 10.0) {
-            guard self.isTimeFrozen else { return }
-            self.isTimeFrozen = false
-            self.startTimer()
-        }
+        freezeRemainingSeconds = rules.powerUps.timeFreezeDurationSeconds
+        resumeFreezeIfNeeded()
     }
 
     // MARK: - Streak Shield
 
-    /// Whether the streak shield can be used (requires 5+ streak and not already used)
+    /// Whether the streak shield can be used at the configured streak threshold.
     public func canUseStreakShield() -> Bool {
-        return correctAnswersInRow >= 5 && canUsePowerUp(.streakShield)
+        correctAnswersInRow >= rules.powerUps.streakShieldMinimumStreak
+            && !hasActiveStreakShield
+            && canUsePowerUp(.streakShield)
     }
 
     /// Activates the streak shield, protecting the current streak from one wrong answer
     public func useStreakShield() {
         guard canUseStreakShield() else { return }
-        guard progressManager?.spendCoins(PowerUp.streakShield.cost) == true else { return }
+        guard let funding = progressManager?.consumePowerUp(.streakShield) else { return }
 
         usedPowerUps.insert(.streakShield)
-        progressManager?.recordPowerUpUsed(.streakShield)
-        analytics?.logPowerUpUsed(type: .streakShield, coinsSpent: PowerUp.streakShield.cost)
+        powerUpUseCounts[.streakShield, default: 0] += 1
+        powerUpsUsedOnCurrentQuestion.insert(.streakShield)
+        recordPowerUpFunding(funding)
         hasActiveStreakShield = true
     }
 
+    private func recordPowerUpFunding(_ funding: PowerUpSpendResult) {
+        lastPowerUpFunding = funding
+        analytics?.logPowerUpUsed(
+            type: funding.powerUp,
+            fundingSource: funding.fundingSource,
+            coinsSpent: funding.coinsSpent
+        )
+    }
+
     public func useExtraLifeWithCoins() -> Bool {
-        guard !extraLifeUsed else { return false }
-        let cost = 50  // Matches the cost shown in RewardView
+        guard rules.extraLife.allowsCoins,
+              !sessionState.isTerminal,
+              extraLifeUseCount < rules.extraLife.maximumUsesPerSession else { return false }
+        let cost = rules.extraLife.coinCost
         guard progressManager?.spendCoins(cost) == true else { return false }
 
-        extraLifeUsed = true
+        extraLifeUseCount += 1
         analytics?.logExtraLifeUsed(method: .coins)
         hideRewardProposalView()  // Hide the reward view first
+        _ = publish(sessionReducer.markLifeGranted())
         incrementLives()  // This shows the life granted animation
         updateRemainingTime()
         startTimer()
@@ -651,17 +840,21 @@ public class QuizViewModel: ObservableObject {
 
     private func resetPowerUpsForQuestion() {
         hiddenAnswerIndices = []
+        powerUpsUsedOnCurrentQuestion = []
         if isTimeFrozen {
             isTimeFrozen = false
+            cancelScheduledTask(.timeFreeze)
+            freezeSegmentStartTime = nil
+            freezeSegmentStartingRemaining = 0
+            freezeRemainingSeconds = 0
         }
     }
 
     private func runStreakAchievedLogicIfNeeded() {
-        if correctAnswersInRow == 5 {
+        if correctAnswersInRow == rules.solo.scoring.streakThreshold {
             haptics?.impact(.heavy)
-            withAnimation(.easeInOut(duration: 0.8)) {
-                shouldChangeBackground = true
-            }
+            shouldChangeBackground = true
+            sessionEffects.append(.showStreak(generation: sessionState.generation))
 
             showStreakView()
         }
@@ -675,7 +868,7 @@ public class QuizViewModel: ObservableObject {
         // Calculate response time in milliseconds
         let responseTimeMs: Int
         if let displayTime = questionDisplayTime {
-            responseTimeMs = Int(clock.now.timeIntervalSince(displayTime) * 1000)
+            responseTimeMs = Self.clampedMilliseconds(from: displayTime, to: clock.now)
         } else {
             responseTimeMs = 0
         }
@@ -700,6 +893,24 @@ public class QuizViewModel: ObservableObject {
         }
     }
 
+    /// Updates the immutable state projection and records rule effects without
+    /// letting presentation flags decide whether a transition is legal.
+    @discardableResult
+    private func publish(_ effects: [SoloQuizSessionEffect]) -> Bool {
+        sessionState = sessionReducer.state
+        shouldAllowTap = sessionState.acceptsAnswerInput
+        sessionEffects.append(contentsOf: effects)
+        return effects.isEmpty
+    }
+
+    /// Returns and clears queued value effects for a SwiftUI host. Existing
+    /// presentation flags remain available for consumers that have not migrated.
+    public func consumeSessionEffects() -> [SoloQuizSessionEffect] {
+        let effects = sessionEffects
+        sessionEffects.removeAll(keepingCapacity: true)
+        return effects
+    }
+
     // MARK: - Deterministic Scheduling
 
     private func schedule(
@@ -713,11 +924,12 @@ public class QuizViewModel: ObservableObject {
         scheduledTasks[kind] = registration
 
         let task = scheduler.schedule(after: delay) { [weak self, weak registration] in
-            operation()
-
             guard let self,
                   let registration,
                   self.scheduledTasks[kind] === registration else { return }
+            operation()
+
+            guard self.scheduledTasks[kind] === registration else { return }
             self.scheduledTasks.removeValue(forKey: kind)
         }
         registration.task = task
@@ -726,5 +938,96 @@ public class QuizViewModel: ObservableObject {
     private func cancelScheduledTasks() {
         scheduledTasks.values.compactMap(\.task).forEach { $0.cancel() }
         scheduledTasks.removeAll()
+    }
+
+    private func cancelScheduledTask(_ kind: ScheduledTaskKind) {
+        scheduledTasks[kind]?.task?.cancel()
+        scheduledTasks.removeValue(forKey: kind)
+    }
+
+    private func scheduleTimerTick(generation: UInt) {
+        timerTask?.cancel()
+        timerTask = scheduler.schedule(after: 1) { [weak self] in
+            guard let self,
+                  self.timerIsRunning,
+                  self.timerGeneration == generation else { return }
+            self.synchronizeTimer()
+            if self.timerIsRunning, self.timerGeneration == generation {
+                self.scheduleTimerTick(generation: generation)
+            }
+        }
+    }
+
+    private func synchronizeTimer(allowTimeout: Bool = true) {
+        guard timerIsRunning, let startTime = timerSegmentStartTime else { return }
+        let elapsed = max(0, clock.now.timeIntervalSince(startTime))
+        let computedRemaining = max(0, timerSegmentStartingRemaining - elapsed)
+        timerRemainingSeconds = min(timerRemainingSeconds, computedRemaining)
+        timeRemaining = Int(ceil(max(0, timerRemainingSeconds - Self.timerPrecisionTolerance)))
+
+        guard allowTimeout, timerRemainingSeconds <= Self.timerPrecisionTolerance else { return }
+        timerRemainingSeconds = 0
+        timeRemaining = 0
+        timerIsRunning = false
+        timerGeneration &+= 1
+        timerSegmentStartTime = nil
+        timerTask?.cancel()
+        timerTask = nil
+        handleTimerTimeoutIfNeeded()
+    }
+
+    private func handleTimerTimeoutIfNeeded() {
+        // Prevent double life-loss when timeout and a tap arrive in the same turn.
+        guard livesRemaining > 0, !shouldPresentResultView,
+              !publish(sessionReducer.lockAnswer(.timedOut)) else { return }
+        shouldAllowTap = false
+        applyWrongAnswer()
+        updateRemainingTime()
+        haptics?.notification(.error)
+        shouldShowWrongAnswerView = true
+
+        schedule(.wrongAnswerOverlay, after: 1.0) {
+            self.shouldShowWrongAnswerView = false
+        }
+    }
+
+    private func pauseFreezeIfNeeded() {
+        guard isTimeFrozen, let startTime = freezeSegmentStartTime else { return }
+        let elapsed = max(0, clock.now.timeIntervalSince(startTime))
+        let computedRemaining = max(0, freezeSegmentStartingRemaining - elapsed)
+        freezeRemainingSeconds = min(freezeRemainingSeconds, computedRemaining)
+        cancelScheduledTask(.timeFreeze)
+        freezeSegmentStartTime = nil
+    }
+
+    private func resumeFreezeIfNeeded() {
+        guard isTimeFrozen else { return }
+        guard freezeRemainingSeconds > 0 else {
+            isTimeFrozen = false
+            startTimer()
+            return
+        }
+        freezeSegmentStartTime = clock.now
+        freezeSegmentStartingRemaining = freezeRemainingSeconds
+        schedule(.timeFreeze, after: freezeRemainingSeconds) {
+            guard self.isTimeFrozen else { return }
+            self.isTimeFrozen = false
+            self.freezeSegmentStartTime = nil
+            self.freezeSegmentStartingRemaining = 0
+            self.freezeRemainingSeconds = 0
+            self.startTimer()
+        }
+    }
+
+    private static func clampedMilliseconds(from start: Date, to end: Date) -> Int {
+        let milliseconds = max(0, end.timeIntervalSince(start)) * 1_000
+        guard milliseconds < Double(Int.max) else { return Int.max }
+        return Int(milliseconds)
+    }
+
+    private static func saturatingAdd(_ lhs: Int, _ rhs: Int) -> Int {
+        let (result, overflow) = lhs.addingReportingOverflow(rhs)
+        guard overflow else { return result }
+        return rhs >= 0 ? Int.max : Int.min
     }
 }

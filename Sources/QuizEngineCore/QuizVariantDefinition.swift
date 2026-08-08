@@ -42,11 +42,26 @@ public struct QuizVariantDefinition {
     public let categories: [QuizCategoryDefinition]
     public let achievements: [AchievementDefinition]
     public let questionResource: QuestionResource
+    public let rules: QuizRulesConfiguration
 
     public init(
         categories: [QuizCategoryDefinition],
         achievements: [AchievementDefinition],
         questionResource: QuestionResource
+    ) throws {
+        try self.init(
+            categories: categories,
+            achievements: achievements,
+            questionResource: questionResource,
+            rules: .serbianCompatible
+        )
+    }
+
+    public init(
+        categories: [QuizCategoryDefinition],
+        achievements: [AchievementDefinition],
+        questionResource: QuestionResource,
+        rules: QuizRulesConfiguration
     ) throws {
         try Self.validate(
             categories: categories,
@@ -56,6 +71,7 @@ public struct QuizVariantDefinition {
         self.categories = categories.sorted { $0.displayOrder < $1.displayOrder }
         self.achievements = achievements
         self.questionResource = questionResource
+        self.rules = rules
     }
 
     public func category(id: String) -> QuizCategoryDefinition? {

@@ -10,22 +10,57 @@ import SwiftUI
 public class PlayerProgressManager: ObservableObject {
     @Published public private(set) var progress: PlayerProgress
     @Published public var newlyUnlockedAchievements: [Achievement] = []
+    @Published public private(set) var persistenceStatus: PersistenceStatus = .fresh
+    @Published public private(set) var lastPersistenceError: PersistenceError?
 
     public let variant: QuizVariantDefinition
     public let questionDataService: QuestionDataService
     private let achievementService: AchievementService
     private let analytics: (any AnalyticsProvider)?
     private let purchaseStatus: (any PurchaseStatusProvider)?
-    private let persistenceURL: URL
+    private let persistenceStore: any QuizEnginePersistenceStore
     private let clock: any QuizEngineClock
     private let calendar: Calendar
+    private var lastPersistedProgress: PlayerProgress
+    private let persistenceLoadFailed: Bool
 
     private static var plistURL: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return documents.appendingPathComponent("player_progress.plist")
     }
 
-    public init(
+    private init(
+        variant: QuizVariantDefinition,
+        questionDataService: QuestionDataService,
+        analytics: (any AnalyticsProvider)?,
+        purchaseStatus: (any PurchaseStatusProvider)?,
+        persistenceStore: any QuizEnginePersistenceStore,
+        clock: any QuizEngineClock,
+        calendar: Calendar,
+        _implementation: Void
+    ) {
+        self.variant = variant
+        self.questionDataService = questionDataService
+        self.achievementService = AchievementService(
+            variant: variant,
+            clock: clock,
+            calendar: calendar
+        )
+        self.analytics = analytics
+        self.purchaseStatus = purchaseStatus
+        self.persistenceStore = persistenceStore
+        self.clock = clock
+        self.calendar = calendar
+        let freshProgress = PlayerProgress.fresh(initialCoins: variant.rules.economy.initialCoins)
+        let loadResult = Self.load(from: persistenceStore, freshProgress: freshProgress)
+        self.progress = loadResult.progress
+        self.persistenceStatus = loadResult.status
+        self.lastPersistenceError = loadResult.error
+        self.lastPersistedProgress = loadResult.progress
+        self.persistenceLoadFailed = loadResult.error != nil
+    }
+
+    public convenience init(
         variant: QuizVariantDefinition,
         questionDataService: QuestionDataService,
         analytics: (any AnalyticsProvider)? = nil,
@@ -34,63 +69,798 @@ public class PlayerProgressManager: ObservableObject {
         clock: any QuizEngineClock = SystemQuizEngineClock(),
         calendar: Calendar = .current
     ) {
-        self.variant = variant
-        self.questionDataService = questionDataService
-        self.achievementService = AchievementService(variant: variant)
-        self.analytics = analytics
-        self.purchaseStatus = purchaseStatus
-        self.persistenceURL = persistenceURL ?? Self.plistURL
-        self.clock = clock
-        self.calendar = calendar
-        self.progress = Self.load(from: persistenceURL ?? Self.plistURL)
+        self.init(
+            variant: variant,
+            questionDataService: questionDataService,
+            analytics: analytics,
+            purchaseStatus: purchaseStatus,
+            persistenceStore: FileQuizEnginePersistenceStore(primaryURL: persistenceURL ?? Self.plistURL),
+            clock: clock,
+            calendar: calendar,
+            _implementation: ()
+        )
+    }
+
+    /// Creates a manager using an injected store and surfaces an existing
+    /// persistence failure instead of falling back to the default progress.
+    public convenience init(
+        variant: QuizVariantDefinition,
+        questionDataService: QuestionDataService,
+        analytics: (any AnalyticsProvider)? = nil,
+        purchaseStatus: (any PurchaseStatusProvider)? = nil,
+        persistenceStore: any QuizEnginePersistenceStore,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        calendar: Calendar = .current
+    ) throws {
+        self.init(
+            variant: variant,
+            questionDataService: questionDataService,
+            analytics: analytics,
+            purchaseStatus: purchaseStatus,
+            persistenceStore: persistenceStore,
+            clock: clock,
+            calendar: calendar,
+            _implementation: ()
+        )
+
+        if let lastPersistenceError {
+            throw lastPersistenceError
+        }
     }
 
     // MARK: - Persistence
 
-    private static func load(from url: URL) -> PlayerProgress {
-        let decoder = PropertyListDecoder()
-
-        guard let data = try? Data(contentsOf: url),
-              let progress = try? decoder.decode(PlayerProgress.self, from: data)
-        else {
-            return PlayerProgress.default
+    public func persist() throws {
+        if persistenceLoadFailed {
+            throw failBecauseInitialLoadFailed()
         }
-
-        return progress
+        do {
+            try persistenceStore.withExclusiveAccess {
+                try writeAndVerify(progress)
+            }
+            lastPersistedProgress = progress
+            persistenceStatus = .saved
+            lastPersistenceError = nil
+        } catch let error as PersistenceError {
+            progress = lastPersistedProgress
+            persistenceStatus = .failed(error)
+            lastPersistenceError = error
+            throw error
+        } catch {
+            let persistenceError = PersistenceError.writeFailed(
+                path: persistenceStore.primaryURL.path,
+                reason: error.localizedDescription
+            )
+            progress = lastPersistedProgress
+            persistenceStatus = .failed(persistenceError)
+            lastPersistenceError = persistenceError
+            throw persistenceError
+        }
     }
 
-    private func save() {
-        let encoder = PropertyListEncoder()
-
-        if let data = try? encoder.encode(progress) {
-            if FileManager.default.fileExists(atPath: persistenceURL.path) {
-                try? data.write(to: persistenceURL)
-            } else {
-                FileManager.default.createFile(atPath: persistenceURL.path, contents: data, attributes: nil)
+    @discardableResult
+    private func save() -> Bool {
+        guard !persistenceLoadFailed else {
+            progress = lastPersistedProgress
+            return false
+        }
+        do {
+            try persistenceStore.withExclusiveAccess {
+                try writeAndVerify(progress)
             }
+            lastPersistedProgress = progress
+            persistenceStatus = .saved
+            lastPersistenceError = nil
+            return true
+        } catch let error as PersistenceError {
+            progress = lastPersistedProgress
+            persistenceStatus = .failed(error)
+            lastPersistenceError = error
+            return false
+        } catch {
+            let persistenceError = PersistenceError.writeFailed(
+                path: persistenceStore.primaryURL.path,
+                reason: error.localizedDescription
+            )
+            progress = lastPersistedProgress
+            persistenceStatus = .failed(persistenceError)
+            lastPersistenceError = persistenceError
+            return false
+        }
+    }
+
+    public func importProgress(
+        _ request: PlayerProgressImportRequest
+    ) throws -> PlayerProgressImportResult {
+        do {
+            if persistenceLoadFailed {
+                throw failBecauseInitialLoadFailed()
+            }
+            return try persistenceStore.withExclusiveAccess {
+                if let existingMarker = try persistenceStore.readDecodedImportMarker().marker {
+                    guard existingMarker.identifier == request.identifier,
+                          existingMarker.sourceFingerprint == request.sourceFingerprint else {
+                        if existingMarker.state == .completed {
+                            throw PersistenceError.conflictingImport(identifier: request.identifier)
+                        }
+                        throw PersistenceError.malformedImportMarker(
+                            path: persistenceStore.transactionMarkerURL.path
+                        )
+                    }
+
+                    if existingMarker.state == .completed {
+                        guard existingMarker.targetProgress == request.progress else {
+                            throw PersistenceError.conflictingImport(identifier: request.identifier)
+                        }
+                        try validateCompletedImport(existingMarker)
+                        persistenceStatus = .alreadyImported
+                        lastPersistenceError = nil
+                        return .alreadyImported
+                    }
+                }
+
+                let previousPrimaryData = try persistenceStore.readPrimary()
+                let hadPrimary = previousPrimaryData != nil
+                let previousProgress = previousPrimaryData.flatMap { data in
+                    try? PersistenceDocumentCodec.decode(
+                        PlayerProgress.self,
+                        from: data,
+                        path: persistenceStore.primaryURL.path
+                    ).payload
+                }
+                let pendingMarker = ImportMarker(
+                    schemaVersion: QuizEnginePersistenceSchema.current,
+                    identifier: request.identifier,
+                    sourceFingerprint: request.sourceFingerprint,
+                    state: .pending,
+                    hadPrimary: hadPrimary,
+                    timestamp: clock.now,
+                    targetProgress: request.progress,
+                    previousProgress: previousProgress
+                )
+                try replaceImportMarker(pendingMarker)
+
+                do {
+                    try writeAndVerify(request.progress)
+
+                    let completedMarker = ImportMarker(
+                        schemaVersion: QuizEnginePersistenceSchema.current,
+                        identifier: request.identifier,
+                        sourceFingerprint: request.sourceFingerprint,
+                        state: .completed,
+                        hadPrimary: hadPrimary,
+                        timestamp: clock.now,
+                        targetProgress: request.progress,
+                        previousProgress: previousProgress
+                    )
+                    try replaceImportMarker(completedMarker)
+
+                    progress = request.progress
+                    lastPersistedProgress = request.progress
+                    persistenceStatus = .imported
+                    lastPersistenceError = nil
+                    return .imported
+                } catch {
+                    let operationError = error
+                    do {
+                        try recoverInterruptedImport(
+                            hadPrimary: hadPrimary,
+                            previousProgress: previousProgress
+                        )
+                    } catch {
+                        throw error
+                    }
+                    throw operationError
+                }
+            }
+        } catch let error as PersistenceError {
+            persistenceStatus = .failed(error)
+            lastPersistenceError = error
+            throw error
+        } catch {
+            let persistenceError = PersistenceError.writeFailed(
+                path: persistenceStore.primaryURL.path,
+                reason: error.localizedDescription
+            )
+            persistenceStatus = .failed(persistenceError)
+            lastPersistenceError = persistenceError
+            throw persistenceError
+        }
+    }
+
+    private func failBecauseInitialLoadFailed() -> PersistenceError {
+        lastPersistenceError ?? .readFailed(
+            path: persistenceStore.primaryURL.path,
+            reason: "The initial persistence load failed."
+        )
+    }
+
+    private func writeAndVerify(_ value: PlayerProgress) throws {
+        let previousPrimaryData = try persistenceStore.readPrimary()
+        let hadPrimary = previousPrimaryData != nil
+        let previousProgress = previousPrimaryData.flatMap { data in
+            try? PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: data,
+                path: persistenceStore.primaryURL.path
+            ).payload
+        }
+        let data: Data
+        do {
+            data = try PersistenceDocumentCodec.encode(
+                value,
+                path: persistenceStore.primaryURL.path
+            )
+        } catch let error as PersistenceError {
+            throw error
+        } catch {
+            throw PersistenceError.writeFailed(
+                path: persistenceStore.primaryURL.path,
+                reason: error.localizedDescription
+            )
+        }
+
+        do {
+            try persistenceStore.replacePrimary(with: data)
+        } catch {
+            let operationError = error
+            do {
+                try repairFailedReplacement(
+                    hadPrimary: hadPrimary,
+                    attemptedData: data,
+                    attemptedValue: value,
+                    previousValue: previousProgress
+                )
+            } catch {
+                throw error
+            }
+            throw operationError
+        }
+
+        do {
+            guard let readBack = try persistenceStore.readPrimary() else {
+                throw PersistenceError.readBackVerificationFailed(
+                    path: persistenceStore.primaryURL.path
+                )
+            }
+            let decoded = try PersistenceDocumentCodec.decode(
+                PlayerProgress.self,
+                from: readBack,
+                path: persistenceStore.primaryURL.path
+            )
+            guard decoded.schemaVersion == QuizEnginePersistenceSchema.current,
+                  decoded.payload == value else {
+                throw PersistenceError.readBackVerificationFailed(
+                    path: persistenceStore.primaryURL.path
+                )
+            }
+        } catch {
+            let verificationError = error
+            do {
+                try rollbackFailedReplacement(
+                    hadPrimary: hadPrimary,
+                    expectedValue: previousProgress
+                )
+            } catch {
+                throw error
+            }
+            if let persistenceError = verificationError as? PersistenceError {
+                throw persistenceError
+            }
+            throw PersistenceError.readBackVerificationFailed(
+                path: persistenceStore.primaryURL.path
+            )
+        }
+    }
+
+    private func repairFailedReplacement<Value: Codable & Equatable & Sendable>(
+        hadPrimary: Bool,
+        attemptedData: Data,
+        attemptedValue: Value,
+        previousValue: Value?
+    ) throws {
+        let currentData: Data?
+        do {
+            currentData = try persistenceStore.readPrimary()
+        } catch {
+            try rollbackFailedReplacement(
+                hadPrimary: hadPrimary,
+                expectedValue: previousValue
+            )
+            return
+        }
+
+        guard let currentData else {
+            if hadPrimary {
+                try rollbackFailedReplacement(
+                    hadPrimary: true,
+                    expectedValue: previousValue
+                )
+            }
+            return
+        }
+
+        let decodedSucceeded: Bool
+        let decodedMatchesAttempt: Bool
+        do {
+            let decoded = try PersistenceDocumentCodec.decode(
+                Value.self,
+                from: currentData,
+                path: persistenceStore.primaryURL.path
+            )
+            decodedSucceeded = true
+            decodedMatchesAttempt = decoded.schemaVersion == QuizEnginePersistenceSchema.current &&
+                decoded.payload == attemptedValue
+        } catch {
+            decodedSucceeded = false
+            decodedMatchesAttempt = false
+        }
+        let needsRecovery = currentData == attemptedData || decodedMatchesAttempt || !decodedSucceeded
+
+        if needsRecovery {
+            try rollbackFailedReplacement(
+                hadPrimary: hadPrimary,
+                expectedValue: previousValue
+            )
+        }
+    }
+
+    private func rollbackFailedReplacement<Value: Codable & Equatable & Sendable>(
+        hadPrimary: Bool,
+        expectedValue: Value?
+    ) throws {
+        do {
+            if hadPrimary {
+                try persistenceStore.restoreBackup()
+                guard let restoredData = try persistenceStore.readPrimary() else {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: persistenceStore.primaryURL.path
+                    )
+                }
+                let restored = try PersistenceDocumentCodec.decode(
+                    Value.self,
+                    from: restoredData,
+                    path: persistenceStore.primaryURL.path
+                )
+                if let expectedValue, restored.payload != expectedValue {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: persistenceStore.primaryURL.path
+                    )
+                }
+            } else {
+                try persistenceStore.removePrimary()
+                if try persistenceStore.readPrimary() != nil {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: persistenceStore.primaryURL.path
+                    )
+                }
+            }
+        } catch let error as PersistenceError {
+            let path = hadPrimary ? persistenceStore.backupURL.path : persistenceStore.primaryURL.path
+            throw PersistenceError.backupRecoveryFailed(
+                path: path,
+                reason: error.localizedDescription
+            )
+        } catch {
+            let path = hadPrimary ? persistenceStore.backupURL.path : persistenceStore.primaryURL.path
+            throw PersistenceError.backupRecoveryFailed(
+                path: path,
+                reason: error.localizedDescription
+            )
+        }
+    }
+
+    private func validateCompletedImport(_ marker: ImportMarker) throws {
+        guard let targetProgress = marker.targetProgress else {
+            throw PersistenceError.malformedImportMarker(
+                path: persistenceStore.transactionMarkerURL.path
+            )
+        }
+        guard let currentData = try persistenceStore.readPrimary() else {
+            throw PersistenceError.readBackVerificationFailed(
+                path: persistenceStore.primaryURL.path
+            )
+        }
+        let current = try PersistenceDocumentCodec.decode(
+            PlayerProgress.self,
+            from: currentData,
+            path: persistenceStore.primaryURL.path
+        )
+        if let previousProgress = marker.previousProgress,
+           previousProgress != targetProgress,
+           current.payload == previousProgress {
+            throw PersistenceError.readBackVerificationFailed(
+                path: persistenceStore.primaryURL.path
+            )
+        }
+    }
+
+    private func replaceImportMarker(_ marker: ImportMarker) throws {
+        let data = try PersistenceMarkerCodec.encode(
+            marker,
+            path: persistenceStore.transactionMarkerURL.path
+        )
+        try persistenceStore.replaceTransactionMarker(with: data)
+        guard try persistenceStore.readDecodedImportMarker().marker == marker else {
+            throw PersistenceError.readBackVerificationFailed(
+                path: persistenceStore.transactionMarkerURL.path
+            )
+        }
+    }
+
+    private func recoverInterruptedImport(
+        hadPrimary: Bool,
+        previousProgress: PlayerProgress?
+    ) throws {
+        if hadPrimary {
+            var currentMatchesPersistedProgress = false
+            let expectedProgress = previousProgress ?? lastPersistedProgress
+            do {
+                guard let currentData = try persistenceStore.readPrimary() else {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: persistenceStore.primaryURL.path
+                    )
+                }
+                let current = try PersistenceDocumentCodec.decode(
+                    PlayerProgress.self,
+                    from: currentData,
+                    path: persistenceStore.primaryURL.path
+                )
+                currentMatchesPersistedProgress = current.payload == expectedProgress
+            } catch {
+                currentMatchesPersistedProgress = false
+            }
+            if !currentMatchesPersistedProgress {
+                _ = try Self.restoreProgressBackupAndVerify(
+                    from: persistenceStore,
+                    expectedProgress: previousProgress
+                )
+            }
+        } else {
+            try persistenceStore.removePrimary()
+        }
+        try persistenceStore.removeTransactionMarker()
+    }
+
+    private static func restoreProgressBackupAndVerify(
+        from store: any QuizEnginePersistenceStore,
+        expectedProgress: PlayerProgress? = nil
+    ) throws -> DecodedPersistence<PlayerProgress> {
+        guard let backupData = try store.readBackup() else {
+            throw PersistenceError.backupUnavailable(path: store.backupURL.path)
+        }
+        let backup = try PersistenceDocumentCodec.decode(
+            PlayerProgress.self,
+            from: backupData,
+            path: store.backupURL.path
+        )
+        if let expectedProgress, backup.payload != expectedProgress {
+            throw PersistenceError.backupRecoveryFailed(
+                path: store.backupURL.path,
+                reason: "The backup does not match the interrupted transaction's previous progress."
+            )
+        }
+        try store.restoreBackup()
+        guard let restoredData = try store.readPrimary() else {
+            throw PersistenceError.readBackVerificationFailed(path: store.primaryURL.path)
+        }
+        let restored = try PersistenceDocumentCodec.decode(
+            PlayerProgress.self,
+            from: restoredData,
+            path: store.primaryURL.path
+        )
+        if restored.payload != backup.payload {
+            throw PersistenceError.backupRecoveryFailed(
+                path: store.backupURL.path,
+                reason: "The restored primary does not match the backup."
+            )
+        }
+        return restored
+    }
+
+    private static func load(
+        from store: any QuizEnginePersistenceStore,
+        freshProgress: PlayerProgress
+    ) -> PlayerProgressLoadResult {
+        do {
+            return try store.withExclusiveAccess {
+                loadUnlocked(from: store, freshProgress: freshProgress)
+            }
+        } catch let error as PersistenceError {
+            return PlayerProgressLoadResult(
+                progress: freshProgress,
+                status: .failed(error),
+                error: error
+            )
+        } catch {
+            let persistenceError = PersistenceError.readFailed(
+                path: store.primaryURL.path,
+                reason: error.localizedDescription
+            )
+            return PlayerProgressLoadResult(
+                progress: freshProgress,
+                status: .failed(persistenceError),
+                error: persistenceError
+            )
+        }
+    }
+
+    private static func loadUnlocked(
+        from store: any QuizEnginePersistenceStore,
+        freshProgress: PlayerProgress
+    ) -> PlayerProgressLoadResult {
+        var recoveryStatus: PersistenceStatus?
+
+        do {
+            func validateCompletedMarker(_ marker: ImportMarker, against progress: PlayerProgress) throws {
+                guard let targetProgress = marker.targetProgress else {
+                    throw PersistenceError.malformedImportMarker(
+                        path: store.transactionMarkerURL.path
+                    )
+                }
+                if let previousProgress = marker.previousProgress,
+                   previousProgress != targetProgress,
+                   progress == previousProgress {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: store.primaryURL.path
+                    )
+                }
+            }
+
+            func recoverFromBackup(_ backupData: Data) throws -> PlayerProgressLoadResult {
+                let backup = try PersistenceDocumentCodec.decode(
+                    PlayerProgress.self,
+                    from: backupData,
+                    path: store.backupURL.path
+                )
+                try store.restoreBackup()
+                guard let restoredData = try store.readPrimary(),
+                      let restored = try? PersistenceDocumentCodec.decode(
+                          PlayerProgress.self,
+                          from: restoredData,
+                          path: store.primaryURL.path
+                      ),
+                      restored.payload == backup.payload else {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: store.primaryURL.path
+                    )
+                }
+                return PlayerProgressLoadResult(
+                    progress: backup.payload,
+                    status: .recoveredFromBackup(schemaVersion: backup.schemaVersion),
+                    error: nil
+                )
+            }
+
+            let importMarker = try store.readDecodedImportMarker().marker
+            if let marker = importMarker, marker.state == .pending {
+                if marker.hadPrimary {
+                    let shouldRestoreBackup: Bool
+                    if let previousProgress = marker.previousProgress {
+                        var currentMatchesPrevious = false
+                        do {
+                            guard let currentData = try store.readPrimary() else {
+                                throw PersistenceError.readBackVerificationFailed(
+                                    path: store.primaryURL.path
+                                )
+                            }
+                            let current = try PersistenceDocumentCodec.decode(
+                                PlayerProgress.self,
+                                from: currentData,
+                                path: store.primaryURL.path
+                            )
+                            currentMatchesPrevious = current.payload == previousProgress
+                        } catch {
+                            currentMatchesPrevious = false
+                        }
+                        shouldRestoreBackup = !currentMatchesPrevious
+                    } else if let targetProgress = marker.targetProgress {
+                        var currentMatchesTarget = false
+                        do {
+                            guard let currentData = try store.readPrimary() else {
+                                throw PersistenceError.readBackVerificationFailed(
+                                    path: store.primaryURL.path
+                                )
+                            }
+                            let current = try PersistenceDocumentCodec.decode(
+                                PlayerProgress.self,
+                                from: currentData,
+                                path: store.primaryURL.path
+                            )
+                            currentMatchesTarget = current.payload == targetProgress
+                        } catch {
+                            currentMatchesTarget = true
+                        }
+                        shouldRestoreBackup = currentMatchesTarget
+                    } else {
+                        shouldRestoreBackup = true
+                    }
+                    if shouldRestoreBackup {
+                        _ = try restoreProgressBackupAndVerify(
+                            from: store,
+                            expectedProgress: marker.previousProgress
+                        )
+                    }
+                } else {
+                    try store.removePrimary()
+                }
+                try store.removeTransactionMarker()
+                recoveryStatus = .recoveredInterruptedImport
+            }
+
+            if let marker = importMarker, marker.state == .completed {
+                guard marker.targetProgress != nil else {
+                    throw PersistenceError.malformedImportMarker(
+                        path: store.transactionMarkerURL.path
+                    )
+                }
+            }
+
+            guard let data = try store.readPrimary() else {
+                if importMarker?.state == .completed {
+                    throw PersistenceError.readBackVerificationFailed(
+                        path: store.primaryURL.path
+                    )
+                }
+                return PlayerProgressLoadResult(
+                    progress: freshProgress,
+                    status: recoveryStatus ?? .fresh,
+                    error: nil
+                )
+            }
+
+            do {
+                let decoded = try PersistenceDocumentCodec.decode(
+                    PlayerProgress.self,
+                    from: data,
+                    path: store.primaryURL.path
+                )
+                if let marker = importMarker, marker.state == .completed {
+                    try validateCompletedMarker(marker, against: decoded.payload)
+                }
+                return PlayerProgressLoadResult(
+                    progress: decoded.payload,
+                    status: recoveryStatus ?? (decoded.isLegacy ? .loadedLegacy : .loaded(schemaVersion: decoded.schemaVersion)),
+                    error: nil
+                )
+            } catch {
+                guard let backupData = try store.readBackup() else {
+                    throw error
+                }
+
+                do {
+                    let recovered = try recoverFromBackup(backupData)
+                    if let marker = importMarker, marker.state == .completed {
+                        try validateCompletedMarker(marker, against: recovered.progress)
+                    }
+                    return recovered
+                } catch let recoveryError as PersistenceError {
+                    throw PersistenceError.backupRecoveryFailed(
+                        path: store.backupURL.path,
+                        reason: recoveryError.localizedDescription
+                    )
+                }
+            }
+        } catch let error as PersistenceError {
+            return PlayerProgressLoadResult(
+                progress: freshProgress,
+                status: .failed(error),
+                error: error
+            )
+        } catch {
+            let persistenceError = PersistenceError.readFailed(
+                path: store.primaryURL.path,
+                reason: error.localizedDescription
+            )
+            return PlayerProgressLoadResult(
+                progress: freshProgress,
+                status: .failed(persistenceError),
+                error: persistenceError
+            )
         }
     }
 
     // MARK: - Coin Operations
 
     public func addCoins(_ amount: Int) {
-        progress.coins += amount
-        progress.totalCoinsEarned += amount
+        guard amount >= 0 else { return }
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(amount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(amount)
+        guard !coinsOverflow, !totalOverflow else { return }
+        progress.coins = coins
+        progress.totalCoinsEarned = total
         save()
     }
 
     public func spendCoins(_ amount: Int) -> Bool {
-        guard progress.coins >= amount else {
+        guard amount >= 0, progress.coins >= amount else {
             return false
         }
+        let (newTotalCoinsSpent, overflow) = progress.totalCoinsSpent.addingReportingOverflow(amount)
+        guard !overflow else { return false }
         progress.coins -= amount
-        progress.totalCoinsSpent += amount
-        save()
-        return true
+        progress.totalCoinsSpent = newTotalCoinsSpent
+        return save()
     }
 
     public func canAfford(_ amount: Int) -> Bool {
-        return progress.coins >= amount
+        amount >= 0 && progress.coins >= amount
+    }
+
+    // MARK: - Power-Up Wallet
+
+    /// Returns the number of free activations available for a power-up.
+    public func powerUpCredits(for powerUp: PowerUp) -> Int {
+        progress.powerUpCredits[powerUp] ?? 0
+    }
+
+    /// Adds free activations without changing the coin balance.
+    @discardableResult
+    public func grantPowerUpCredits(_ amount: Int, for powerUp: PowerUp) -> Bool {
+        guard amount > 0 else { return false }
+        let currentBalance = powerUpCredits(for: powerUp)
+        guard currentBalance >= 0 else { return false }
+        let (newBalance, overflow) = currentBalance.addingReportingOverflow(amount)
+        guard !overflow else { return false }
+
+        progress.powerUpCredits[powerUp] = newBalance
+        return save()
+    }
+
+    /// Returns whether a free credit or the package-defined coin cost can fund the power-up.
+    public func canFundPowerUp(_ powerUp: PowerUp) -> Bool {
+        let creditBalance = powerUpCredits(for: powerUp)
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        guard creditBalance >= 0, usageCount >= 0, usageCount < Int.max else {
+            return false
+        }
+        if creditBalance > 0 {
+            return true
+        }
+        let cost = powerUpCost(for: powerUp)
+        guard progress.coins >= cost else { return false }
+        return !progress.totalCoinsSpent.addingReportingOverflow(cost).overflow
+    }
+
+    /// Consumes a free credit before coins and persists funding and usage as one transaction.
+    @discardableResult
+    public func consumePowerUp(_ powerUp: PowerUp) -> PowerUpSpendResult? {
+        let result: PowerUpSpendResult
+        let creditBalance = powerUpCredits(for: powerUp)
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        let (newUsageCount, usageOverflow) = usageCount.addingReportingOverflow(1)
+        guard usageCount >= 0, !usageOverflow else { return nil }
+
+        if creditBalance > 0 {
+            progress.powerUpCredits[powerUp] = creditBalance - 1
+            result = PowerUpSpendResult(
+                powerUp: powerUp,
+                fundingSource: .freeCredit,
+                coinsSpent: 0
+            )
+        } else {
+            let cost = powerUpCost(for: powerUp)
+            guard creditBalance == 0, progress.coins >= cost else {
+                return nil
+            }
+            let (newTotalCoinsSpent, spendingOverflow) = progress.totalCoinsSpent.addingReportingOverflow(cost)
+            guard !spendingOverflow else { return nil }
+            progress.coins -= cost
+            progress.totalCoinsSpent = newTotalCoinsSpent
+            result = PowerUpSpendResult(
+                powerUp: powerUp,
+                fundingSource: .coins,
+                coinsSpent: cost
+            )
+        }
+
+        recordPowerUpUsage(powerUp, newUsageCount: newUsageCount)
+        guard save() else { return nil }
+        return result
+    }
+
+    public func powerUpCost(for powerUp: PowerUp) -> Int {
+        variant.rules.powerUps.rule(for: powerUp)?.coinCost ?? powerUp.cost
     }
 
     /// Marks that the 500 premium bonus coins have been received.
@@ -114,13 +884,18 @@ public class PlayerProgressManager: ObservableObject {
             return nil
         }
 
-        let rewardAmount = progress.dailyRewardAmount()
+        let rewardAmount = progress.dailyRewardAmount(using: variant.rules.economy.dailyRewardTiers)
         let streakDay = progress.currentStreak
 
-        progress.coins += rewardAmount
-        progress.totalCoinsEarned += rewardAmount
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(rewardAmount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(rewardAmount)
+        guard !coinsOverflow, !totalOverflow else { return nil }
+        progress.coins = coins
+        progress.totalCoinsEarned = total
         progress.lastDailyRewardClaimedDate = now
-        save()
+        guard save() else {
+            return nil
+        }
 
         // Log analytics event
         analytics?.logDailyRewardClaimed(streakDay: streakDay, amount: rewardAmount)
@@ -186,7 +961,7 @@ public class PlayerProgressManager: ObservableObject {
 
     /// Records the total question count when the user achieves 100% in a category.
     /// Looks up the real category total itself, so it works correctly in both
-    /// category mode and practice mode (where the session is only 20 questions).
+    /// category mode and practice mode with variant-configured session sizes.
     public func markCategoryHundredPercent(category: String) {
         guard var stat = progress.categoryStats[category],
               let totalQuestions = try? questionDataService.getQuestionCount(forCategory: category)
@@ -229,6 +1004,8 @@ public class PlayerProgressManager: ObservableObject {
             save()
             return
         }
+
+        guard today >= lastPlayed else { return }
 
         if calendar.isDate(lastPlayed, inSameDayAs: today) {
             // Already played today, no change
@@ -301,21 +1078,16 @@ public class PlayerProgressManager: ObservableObject {
     /// Records that a power-up was used (called when power-up is activated)
     /// - Parameter powerUp: The power-up that was used
     public func recordPowerUpUsed(_ powerUp: PowerUp) {
-        let key: String
-        switch powerUp {
-        case .fiftyFifty:
-            key = "fiftyFifty"
-        case .skipQuestion:
-            key = "skipQuestion"
-        case .timeFreeze:
-            key = "timeFreeze"
-        case .streakShield:
-            key = "streakShield"
-        }
-
-        progress.powerUpTypesUsed.insert(key)
-        progress.lifetimePowerUpsUsed = (progress.lifetimePowerUpsUsed ?? 0) + 1
+        let usageCount = progress.lifetimePowerUpsUsed ?? 0
+        let (newUsageCount, overflow) = usageCount.addingReportingOverflow(1)
+        guard usageCount >= 0, !overflow else { return }
+        recordPowerUpUsage(powerUp, newUsageCount: newUsageCount)
         save()
+    }
+
+    private func recordPowerUpUsage(_ powerUp: PowerUp, newUsageCount: Int) {
+        progress.powerUpTypesUsed.insert(powerUp.rawValue)
+        progress.lifetimePowerUpsUsed = newUsageCount
     }
 
     // MARK: - Multiplayer Result Recording
@@ -337,6 +1109,11 @@ public class PlayerProgressManager: ObservableObject {
         coinsEarned: Int,
         responseTimes: [Int]
     ) {
+        guard coinsEarned >= 0 else { return }
+        let (newCoins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsEarned)
+        let (newTotalCoinsEarned, totalCoinsOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsEarned)
+        guard !coinsOverflow, !totalCoinsOverflow else { return }
+
         progress.multiplayerGamesPlayed += 1
 
         if draw {
@@ -362,9 +1139,112 @@ public class PlayerProgressManager: ObservableObject {
         progress.multiplayerTotalQuestionsAnswered += questionsCompleted
         progress.multiplayerTotalQuestionsCorrect += questionsCorrect
 
-        progress.coins += coinsEarned
-        progress.totalCoinsEarned += coinsEarned
+        progress.coins = newCoins
+        progress.totalCoinsEarned = newTotalCoinsEarned
         save()
+    }
+
+    /// Records a multiplayer result once for a stable match identifier.
+    ///
+    /// The receipt and every statistic/reward mutation are persisted by the
+    /// same transaction. A repeated identical terminal callback is therefore
+    /// harmless even after the process is recreated.
+    @discardableResult
+    public func recordMultiplayerResult(
+        matchID: String,
+        fingerprint: String,
+        won: Bool,
+        draw: Bool,
+        score: Int,
+        questionsCompleted: Int,
+        questionsCorrect: Int,
+        coinsEarned: Int,
+        responseTimes: [Int]
+    ) -> MultiplayerResultRecordingOutcome {
+        guard !matchID.isEmpty,
+              !fingerprint.isEmpty,
+              questionsCompleted >= 0,
+              questionsCorrect >= 0,
+              questionsCorrect <= questionsCompleted,
+              coinsEarned >= 0,
+              responseTimes.allSatisfy({ $0 >= 0 }) else {
+            return .rejected
+        }
+
+        if let receipt = progress.multiplayerMatchReceipts.first(where: { $0.matchID == matchID }) {
+            return receipt.fingerprint == fingerprint ? .alreadyRecorded : .conflictingReceipt
+        }
+
+        let snapshot = progress
+        let totalResponseTime = responseTimes.reduce(into: 0) { partial, value in
+            let (next, overflow) = partial.addingReportingOverflow(value)
+            partial = overflow ? Int.max : next
+        }
+        guard totalResponseTime != Int.max else { return .rejected }
+
+        let values = [
+            progress.multiplayerGamesPlayed,
+            progress.multiplayerGamesWon,
+            progress.multiplayerGamesLost,
+            progress.multiplayerGamesDraw,
+            progress.multiplayerWinStreak,
+            progress.multiplayerTotalResponseTimeMs,
+            progress.multiplayerTotalQuestionsAnswered,
+            progress.multiplayerTotalQuestionsCorrect
+        ]
+        guard values.allSatisfy({ $0 >= 0 }) else { return .rejected }
+
+        let (newCoins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsEarned)
+        let (newTotalCoinsEarned, earnedOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsEarned)
+        let (newGamesPlayed, gamesOverflow) = progress.multiplayerGamesPlayed.addingReportingOverflow(1)
+        let (newResponseTime, responseOverflow) = progress.multiplayerTotalResponseTimeMs.addingReportingOverflow(totalResponseTime)
+        let (newQuestionsAnswered, answeredOverflow) = progress.multiplayerTotalQuestionsAnswered.addingReportingOverflow(questionsCompleted)
+        let (newQuestionsCorrect, correctOverflow) = progress.multiplayerTotalQuestionsCorrect.addingReportingOverflow(questionsCorrect)
+        guard !coinsOverflow, !earnedOverflow, !gamesOverflow, !responseOverflow, !answeredOverflow, !correctOverflow else {
+            return .rejected
+        }
+
+        progress.multiplayerGamesPlayed = newGamesPlayed
+        if draw {
+            let (next, overflow) = progress.multiplayerGamesDraw.addingReportingOverflow(1)
+            guard !overflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesDraw = next
+            progress.multiplayerWinStreak = 0
+        } else if won {
+            let (wins, winsOverflow) = progress.multiplayerGamesWon.addingReportingOverflow(1)
+            let (streak, streakOverflow) = progress.multiplayerWinStreak.addingReportingOverflow(1)
+            guard !winsOverflow, !streakOverflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesWon = wins
+            progress.multiplayerWinStreak = streak
+            progress.longestMultiplayerWinStreak = max(progress.longestMultiplayerWinStreak, streak)
+        } else {
+            let (losses, overflow) = progress.multiplayerGamesLost.addingReportingOverflow(1)
+            guard !overflow else { progress = snapshot; return .rejected }
+            progress.multiplayerGamesLost = losses
+            progress.multiplayerWinStreak = 0
+        }
+
+        progress.bestMultiplayerScore = max(progress.bestMultiplayerScore, score)
+        progress.multiplayerTotalResponseTimeMs = newResponseTime
+        progress.multiplayerTotalQuestionsAnswered = newQuestionsAnswered
+        progress.multiplayerTotalQuestionsCorrect = newQuestionsCorrect
+        progress.coins = newCoins
+        progress.totalCoinsEarned = newTotalCoinsEarned
+        progress.multiplayerMatchReceipts.append(.init(matchID: matchID, fingerprint: fingerprint))
+        if progress.multiplayerMatchReceipts.count > 256 {
+            progress.multiplayerMatchReceipts.removeFirst(progress.multiplayerMatchReceipts.count - 256)
+        }
+
+        guard save() else {
+            progress = snapshot
+            return .persistenceFailed(
+                lastPersistenceError ?? .writeFailed(
+                    path: persistenceStore.primaryURL.path,
+                    reason: "The multiplayer result transaction was not persisted."
+                )
+            )
+        }
+        return .recorded
     }
 
     // MARK: - Question Seen Tracking
@@ -412,15 +1292,20 @@ public class PlayerProgressManager: ObservableObject {
             progress.unlockedAchievements.insert(achievement.id)
             progress.coins += achievement.coinReward
             progress.totalCoinsEarned += achievement.coinReward
+        }
 
-            // Log analytics event
+        guard save() else {
+            newlyUnlockedAchievements = []
+            return
+        }
+
+        // Log analytics events only after the durable write succeeds.
+        for achievement in unlocked {
             analytics?.logAchievementUnlocked(
                 achievementId: achievement.id,
                 coinReward: achievement.coinReward
             )
         }
-
-        save()
 
         // Publish newly unlocked for UI to display
         newlyUnlockedAchievements = unlocked
@@ -445,9 +1330,10 @@ public class PlayerProgressManager: ObservableObject {
         }
 
         progress.unlockedAchievements.insert(id)
-        addCoins(coinReward)
+        progress.coins += coinReward
+        progress.totalCoinsEarned += coinReward
 
-        return true
+        return save()
     }
 
     /// Checks if an achievement is unlocked
@@ -477,7 +1363,7 @@ public class PlayerProgressManager: ObservableObject {
     }
 
     public var dailyRewardAmount: Int {
-        progress.dailyRewardAmount()
+        progress.dailyRewardAmount(using: variant.rules.economy.dailyRewardTiers)
     }
 
     // NOTE: streakColor was removed — it uses Color.Theme.accentBright which is app-specific.
@@ -566,22 +1452,31 @@ public class PlayerProgressManager: ObservableObject {
 
     // MARK: - Reward Ad Tracking
 
-    /// Checks if the user can watch a rewarded ad for coins (6-hour cooldown)
+    /// Checks if the user can watch a rewarded ad for coins.
     public func canWatchRewardAd() -> Bool {
         guard let lastWatched = progress.lastRewardAdWatchedDate else {
             return true
         }
         let now = clock.now
-        let hoursSince = now.timeIntervalSince(lastWatched) / 3600
-        return hoursSince >= 6
+        let secondsSince = max(0, now.timeIntervalSince(lastWatched))
+        return secondsSince >= variant.rules.economy.rewardAd.cooldownSeconds
     }
 
-    /// Records that the user watched a rewarded ad and awards coins
-    /// - Parameter coinsAwarded: Number of coins to award (default: 25)
+    public func recordRewardAdWatched() {
+        recordRewardAdWatched(coinsAwarded: variant.rules.economy.rewardAd.coinReward)
+    }
+
+    /// Records that the user watched a rewarded ad and awards an explicit compatibility amount.
     public func recordRewardAdWatched(coinsAwarded: Int = 25) {
+        guard coinsAwarded >= 0 else { return }
         let now = clock.now
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsAwarded)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsAwarded)
+        guard !coinsOverflow, !totalOverflow else { return }
         progress.lastRewardAdWatchedDate = now
-        addCoins(coinsAwarded)
+        progress.coins = coins
+        progress.totalCoinsEarned = total
+        save()
     }
 
     /// Returns the time remaining until the next reward ad is available
@@ -591,8 +1486,8 @@ public class PlayerProgressManager: ObservableObject {
             return nil
         }
         let now = clock.now
-        let secondsSince = now.timeIntervalSince(lastWatched)
-        let cooldownSeconds: TimeInterval = 6 * 3600 // 6 hours
+        let secondsSince = max(0, now.timeIntervalSince(lastWatched))
+        let cooldownSeconds = variant.rules.economy.rewardAd.cooldownSeconds
         let remaining = cooldownSeconds - secondsSince
         return remaining > 0 ? remaining : nil
     }
@@ -669,14 +1564,16 @@ public class PlayerProgressManager: ObservableObject {
             return false
         }
 
-        // Try to spend coins
-        guard spendCoins(cost) else {
+        guard progress.coins >= cost else {
             return false
         }
 
-        // Mark as unlocked
+        progress.coins -= cost
+        progress.totalCoinsSpent += cost
         progress.manuallyUnlockedCategories.insert(normalizedID)
-        save()
+        guard save() else {
+            return false
+        }
 
         // Log analytics event
         analytics?.logCategoryUnlocked(categoryId: normalizedID, coinsSpent: cost)
@@ -800,7 +1697,7 @@ public class PlayerProgressManager: ObservableObject {
     // MARK: - Advanced Statistics
 
     /// Session statistics collected during gameplay for end-of-session recording
-    public struct SessionStatistics {
+    public struct SessionStatistics: Sendable {
         public var questionsAnswered: Int
         public var questionsCorrect: Int
         public var totalResponseTimeMs: Int
@@ -815,6 +1712,10 @@ public class PlayerProgressManager: ObservableObject {
             self.questionsByDifficulty = [:]
             self.correctByDifficulty = [:]
             self.sessionHour = calendar.component(.hour, from: now)
+        }
+
+        public init(clock: any QuizEngineClock, calendar: Calendar) {
+            self.init(calendar: calendar, now: clock.now)
         }
     }
 

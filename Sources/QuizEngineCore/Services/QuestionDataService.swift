@@ -10,7 +10,7 @@ import Foundation
 // MARK: - Phase 4A: Session Build Result
 
 /// Result of building a session, includes recycling status for UI feedback
-public struct SessionBuildResult {
+public struct SessionBuildResult: Sendable {
     /// Questions selected for this session
     public let questions: [Question]
     /// True if ALL questions in category have been seen (recycling will occur)
@@ -31,7 +31,7 @@ public struct SessionBuildResult {
 // MARK: - Practice Session Result
 
 /// Result of building a practice session with completion tracking
-public struct PracticeSessionResult {
+public struct PracticeSessionResult: Sendable {
     /// Questions selected for this session
     public let questions: [Question]
     /// Total questions in the category
@@ -65,6 +65,7 @@ public final class QuestionDataService: QuestionDataServiceProvider {
     private let resourceBundle: Bundle
     private let questionsFileName: String
     private var randomNumberGenerator: any RandomNumberGenerator
+    public let rules: QuizRulesConfiguration
 
     public init(
         resource: QuestionResource,
@@ -73,6 +74,28 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         self.resourceBundle = resource.bundle
         self.questionsFileName = resource.fileName
         self.randomNumberGenerator = randomNumberGenerator
+        self.rules = .serbianCompatible
+    }
+
+    public init(
+        variant: QuizVariantDefinition,
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
+        self.resourceBundle = variant.questionResource.bundle
+        self.questionsFileName = variant.questionResource.fileName
+        self.randomNumberGenerator = randomNumberGenerator
+        self.rules = variant.rules
+    }
+
+    public init(
+        resource: QuestionResource,
+        rules: QuizRulesConfiguration,
+        randomNumberGenerator: any RandomNumberGenerator = SystemRandomNumberGenerator()
+    ) {
+        self.resourceBundle = resource.bundle
+        self.questionsFileName = resource.fileName
+        self.randomNumberGenerator = randomNumberGenerator
+        self.rules = rules
     }
 
     public init(
@@ -83,6 +106,7 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         self.resourceBundle = bundle
         self.questionsFileName = fileName
         self.randomNumberGenerator = randomNumberGenerator
+        self.rules = .serbianCompatible
     }
 
     // MARK: - Load all questions from default file
@@ -143,17 +167,25 @@ public final class QuestionDataService: QuestionDataServiceProvider {
 
     public func getQuestionsForCompetitiveMode() throws -> [Question] {
         let allQuestions = try getQuestionData().questions
-        return allQuestions.shuffled(using: &randomNumberGenerator)
+        let shuffled = allQuestions.shuffled(using: &randomNumberGenerator)
+        guard let limit = rules.sessions.competitiveQuestionLimit else { return shuffled }
+        return Array(shuffled.prefix(limit))
     }
 
     // MARK: - Category Mode (All Questions from Category)
 
     public func getQuestionsForCategoryMode(category: String) throws -> [Question] {
         let categoryQuestions = try getQuestions(category: category, difficulty: nil)
-        return categoryQuestions.shuffled(using: &randomNumberGenerator)
+        let shuffled = categoryQuestions.shuffled(using: &randomNumberGenerator)
+        guard let limit = rules.sessions.categoryQuestionLimit else { return shuffled }
+        return Array(shuffled.prefix(limit))
     }
 
     // MARK: - Multiplayer Mode (Random from All Categories)
+
+    public func getQuestionsForMultiplayerMatch() throws -> [Question] {
+        try getQuestionsForMultiplayerMatch(count: rules.sessions.multiplayerQuestionCount)
+    }
 
     public func getQuestionsForMultiplayerMatch(count: Int = 15) throws -> [Question] {
         let allQuestions = try getQuestionData().questions.filter { $0.imageName == nil }
@@ -164,8 +196,34 @@ public final class QuestionDataService: QuestionDataServiceProvider {
 
     public func getQuestionsForPracticeMode(
         category: String?,
+        correctlyAnsweredIDs: Set<Int>
+    ) throws -> PracticeSessionResult {
+        try getQuestionsForPracticeMode(
+            category: category,
+            correctlyAnsweredIDs: correctlyAnsweredIDs,
+            sessionSize: rules.sessions.practiceQuestionCount,
+            unansweredRatio: rules.sessions.practiceUnansweredRatio
+        )
+    }
+
+    public func getQuestionsForPracticeMode(
+        category: String?,
         correctlyAnsweredIDs: Set<Int>,
         sessionSize: Int = 20
+    ) throws -> PracticeSessionResult {
+        try getQuestionsForPracticeMode(
+            category: category,
+            correctlyAnsweredIDs: correctlyAnsweredIDs,
+            sessionSize: sessionSize,
+            unansweredRatio: 0.8
+        )
+    }
+
+    private func getQuestionsForPracticeMode(
+        category: String?,
+        correctlyAnsweredIDs: Set<Int>,
+        sessionSize: Int,
+        unansweredRatio: Double
     ) throws -> PracticeSessionResult {
         let allCategoryQuestions = try getQuestions(category: category, difficulty: nil)
         let totalInCategory = allCategoryQuestions.count
@@ -180,7 +238,10 @@ public final class QuestionDataService: QuestionDataServiceProvider {
             .filter { correctlyAnsweredIDs.contains($0.id) }
             .shuffled(using: &randomNumberGenerator)
 
-        let unansweredTarget = Int(Double(sessionSize) * 0.8)
+        let scaledUnansweredTarget = Double(sessionSize) * unansweredRatio
+        let unansweredTarget = scaledUnansweredTarget >= Double(Int.max)
+            ? Int.max
+            : Int(scaledUnansweredTarget)
         let unansweredToTake = min(unansweredTarget, unanswered.count)
         let answeredToTake   = min(sessionSize - unansweredToTake, answered.count)
 

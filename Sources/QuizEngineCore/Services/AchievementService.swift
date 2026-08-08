@@ -4,16 +4,35 @@ import Foundation
 public final class AchievementService {
     public let definitions: [AchievementDefinition]
     private let categoryIDs: Set<String>
+    private let clock: any QuizEngineClock
+    private let calendar: Calendar
 
-    public init(variant: QuizVariantDefinition) {
+    public init(
+        variant: QuizVariantDefinition,
+        clock: any QuizEngineClock = SystemQuizEngineClock(),
+        calendar: Calendar = .current
+    ) {
         self.definitions = variant.achievements
         self.categoryIDs = Set(variant.categories.map(\.id))
+        self.clock = clock
+        self.calendar = calendar
+    }
+
+    public func checkAchievements(progress: PlayerProgress) -> [AchievementDefinition] {
+        checkAchievements(progress: progress, date: clock.now, calendar: calendar)
     }
 
     public func checkAchievements(
         progress: PlayerProgress,
-        date: Date = Date(),
-        calendar: Calendar = .current
+        date: Date
+    ) -> [AchievementDefinition] {
+        checkAchievements(progress: progress, date: date, calendar: calendar)
+    }
+
+    public func checkAchievements(
+        progress: PlayerProgress,
+        date: Date,
+        calendar: Calendar
     ) -> [AchievementDefinition] {
         definitions.filter {
             !progress.unlockedAchievements.contains($0.id)

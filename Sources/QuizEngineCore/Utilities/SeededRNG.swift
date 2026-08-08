@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct SeededRandomNumberGenerator: RandomNumberGenerator {
+public struct SeededRandomNumberGenerator: RandomNumberGenerator, Sendable {
     private var state: UInt64
 
     public init(seed: UInt64) {
