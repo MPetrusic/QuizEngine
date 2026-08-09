@@ -90,9 +90,11 @@ Rules:
 The authoritative work queue lives in the **AmericanQuiz** repo, not here:
 
 - `Docs/AmericanQuizMasterPlan/00_MASTER_PLAN.md` — overall plan
-- `Docs/AmericanQuizMasterPlan/03_FEATURE_AND_ENGINE_MAPPING.md` — the QE-1…QE-8 hardening requirements
+- `Docs/AmericanQuizMasterPlan/03_FEATURE_AND_ENGINE_MAPPING.md` — the QE-1…QE-7 hardening requirements
 - `Docs/AmericanQuizMasterPlan/06_QUALITY_AND_RELEASE.md` — release gates
-- `Docs/AmericanQuizMasterPlan/17_QUIZENGINE_V0_2_0_BLOCKING_GAPS.md` — the open QEB-01…QEB-06 blockers
+- `Docs/AmericanQuizMasterPlan/17_QUIZENGINE_V0_2_0_BLOCKING_GAPS.md` — the QEB-01…QEB-06 blockers
+
+`QE-8` is the **optional offline daily challenge**: deferred, conditional, and unimplemented. It is not a hardening requirement and not release validation. Release validation is `QE-RV`. Some historical session summaries use "QE-8" for release validation; each carries a status note explaining that collision.
 
 Where an older status document says an item is complete but the blocking-gaps handoff says it is open, **the handoff wins** until its acceptance criteria actually pass.
 
