@@ -1184,6 +1184,49 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    @available(*, deprecated, message: "Deliberately exercises the deprecated v0.1.2 formatter compatibility property.")
+    func testDailyStatsDateFormatterCompatibilityUsesIndependentInstances() throws {
+        let first: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+        let second: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+
+        XCTAssertFalse(first === second)
+        XCTAssertEqual(first.dateFormat, "yyyy-MM-dd")
+        XCTAssertEqual(first.timeZone, TimeZone.current)
+
+        let utc = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = utc
+        let fixedDate = try XCTUnwrap(
+            utcCalendar.date(from: DateComponents(year: 2026, month: 8, day: 9, hour: 0, minute: 30))
+        )
+        first.timeZone = utc
+        XCTAssertEqual(first.string(from: fixedDate), "2026-08-09")
+
+        first.dateFormat = "HH"
+        first.timeZone = TimeZone(identifier: "Pacific/Honolulu")!
+        let later: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+        XCTAssertEqual(later.dateFormat, "yyyy-MM-dd")
+        XCTAssertEqual(later.timeZone, TimeZone.current)
+
+        var losAngeles = Calendar(identifier: .gregorian)
+        losAngeles.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        XCTAssertEqual(PlayerProgress.dateKey(for: fixedDate, calendar: losAngeles), "2026-08-08")
+
+        let variant = try makeAlternateVariant()
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: FakePersistenceStore(),
+            clock: TestClock(now: fixedDate),
+            calendar: losAngeles
+        )
+        manager.recordAdvancedSessionStats(
+            PlayerProgressManager.SessionStatistics(calendar: losAngeles, now: fixedDate)
+        )
+        XCTAssertNotNil(manager.progress.dailyStats["2026-08-08"])
+        XCTAssertNil(manager.progress.dailyStats["00"])
+    }
+
     func testProgressManagerUsesTemporaryPersistenceAndInjectedTime() throws {
         let persistence = try TemporaryPersistence()
         var calendar = Calendar(identifier: .gregorian)

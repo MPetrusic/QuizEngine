@@ -736,6 +736,18 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
 
     // MARK: - Date Formatting
 
+    /// Source-compatible daily-stat formatter from v0.1.2.
+    ///
+    /// A new formatter is returned for every access so callers cannot mutate shared
+    /// engine state. New code should use ``dateKey(for:calendar:)`` instead.
+    @available(*, deprecated, message: "Use dateKey(for:calendar:) with an explicit calendar.")
+    public static var dailyStatsDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        return formatter
+    }
+
     /// Returns the date key for today
     public static var todayKey: String {
         dateKey(for: Date(), calendar: .current)
