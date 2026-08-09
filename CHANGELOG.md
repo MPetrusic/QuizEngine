@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.2
+
+Documentation only. No public API, behavior, persistence, or wire-protocol change from `v0.2.1`; the two releases are functionally identical.
+
+- Point the consumer setup snippets in `README.md`, `Examples/StarterQuiz/README.md`, and the persistence setup checklist at this release instead of exact `0.2.0`, and state why `0.2.0` must not be pinned. Those snippets shipped inside `v0.2.0` and `v0.2.1` still naming `0.2.0`, so a consumer copying them landed on the release that loses coins, statistics, and the match receipt when a terminal result fails to save.
+
+Pin `0.2.2` for the corrected instructions. `0.2.1` is equally safe to run — the difference is documentation only.
+
 ## v0.2.1
 
 Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag is unchanged; nothing in this section rewrites it.

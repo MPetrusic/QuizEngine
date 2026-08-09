@@ -11,7 +11,7 @@ Open `StarterQuiz.xcodeproj`. The project resolves QuizEngine through its local 
 In Xcode, add a package dependency with:
 
 ```swift
-.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.1")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.2")
 ```
 
 Do not pin `0.2.0`; see the [changelog](../../CHANGELOG.md) for the multiplayer defect it carries.
