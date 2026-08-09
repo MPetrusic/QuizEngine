@@ -11,6 +11,11 @@ Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag i
 - QEB-02: replace ad-hoc replay suppression with a bounded contiguous-sequence buffer, and give ordering gaps, buffer overflow, unexpected phases, wrong-role messages, invalid configurations, impossible round payloads, phase deadlines, and transport send failures typed terminal outcomes.
 - QEB-02: report a duplicate category from content validation as `QuizContentValidationIssue.duplicateCategory`.
 - QEB-02: add the protocol, configuration, ordering, lifecycle, timeout, host/guest, and late-callback test matrix, with one invalid field per configuration payload.
+- QEB-03: add exact historical persistence fixtures for `v0.1.0`, `v0.1.1`, `v0.1.2`, `v0.1.3`, and `v0.2.0` schema 1 under `Tests/QuizEngineCoreTests/Resources/PersistenceFixtures`, each emitted by building and running its own release tag in a detached worktree rather than synthesized with current models.
+- QEB-03: add `Scripts/generate-persistence-fixtures.sh` and the per-tag generators, which reproduce every fixture deterministically inside an isolated home directory, and a generated `manifest.json` recording tag, commit, path, SHA-256, byte count, producing type and call, storage path, envelope and load-status expectation, provenance, measured byte-equivalence between releases, and the absence of real user data.
+- QEB-03: add a table-driven migration suite covering bundle hash verification, public-path loading, load status, field-by-field values, mutation, promotion to the current envelope, reload, repeated import returning `.alreadyImported` without duplicate value, and corrupt-primary recovery from a valid historical schema-0 and schema-1 backup.
+- QEB-03: dispatch envelope decoding on `QuizEnginePersistenceSchema.decodableEnvelopeVersions` instead of equality with `current`, so a document written by any released schema keeps loading and is promoted by the next save, and only an unknown future version is rejected. Behaviour is unchanged at schema 1 and the on-disk format of schema 1 is unchanged.
+- QEB-03: move the Core test persistence fixtures to a `.copy` resource rule. `.process` flattens the resource tree, and the four `v0.1.x` releases deliberately keep separate fixtures under identical file names.
 
 ## v0.2.0
 
