@@ -181,6 +181,12 @@ func json(_ progress: PlayerProgress) -> [String: Any] {
     if let date = progress.previousAppOpenDate { value["previousAppOpenDate"] = isoString(date) }
     if let date = progress.lastPlayedDate { value["lastPlayedDate"] = isoString(date) }
     if let used = progress.lifetimePowerUpsUsed { value["lifetimePowerUpsUsed"] = used }
+    if progress.hasReceivedPremiumBonusCoins {
+        // Released documents only have the Boolean. Current decoding maps it to a
+        // permanent unversioned identity so migration cannot re-award the bonus.
+        value["premiumBonusClaimedVersion"] = "legacy-unversioned"
+        value["premiumBonusClaimedFingerprint"] = "legacy-unversioned"
+    }
     return value
 }
 
