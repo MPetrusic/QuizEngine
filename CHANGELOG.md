@@ -16,6 +16,9 @@ Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag i
 - QEB-03: add a table-driven migration suite covering bundle hash verification, public-path loading, load status, field-by-field values, mutation, promotion to the current envelope, reload, repeated import returning `.alreadyImported` without duplicate value, and corrupt-primary recovery from a valid historical schema-0 and schema-1 backup.
 - QEB-03: dispatch envelope decoding on `QuizEnginePersistenceSchema.decodableEnvelopeVersions` instead of equality with `current`, so a document written by any released schema keeps loading and is promoted by the next save, and only an unknown future version is rejected. Behaviour is unchanged at schema 1 and the on-disk format of schema 1 is unchanged.
 - QEB-03: move the Core test persistence fixtures to a `.copy` resource rule. `.process` flattens the resource tree, and the four `v0.1.x` releases deliberately keep separate fixtures under identical file names.
+- QEB-04: add schema 2 with a bounded durable reward-receipt ledger and a separately persisted, non-prunable Premium claim identity; schema-0 and the committed `v0.2.0` schema-1 documents retain their balances and promote on their next save.
+- QEB-04: add atomic, receipt-backed rewarded-ad and Premium bonus transactions with typed duplicate, conflict, eligibility, rejection, and persistence-failure outcomes, checked arithmetic, and full rollback on failed saves.
+- QEB-04: deprecate the source-compatible reward bridges, make rewarded-ad bridges cooldown-gated and rollback-safe, and make the Premium marker a non-awarding legacy claim marker. Advertising SDK, StoreKit, entitlement resolution, Premium amount policy, and stable provider receipt acquisition remain app-owned.
 
 ## v0.2.0
 

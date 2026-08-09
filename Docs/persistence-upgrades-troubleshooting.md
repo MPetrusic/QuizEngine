@@ -2,7 +2,7 @@
 
 ## Storage contracts
 
-`PlayerProgressManager` stores progress in `Documents/player_progress.plist` unless the app injects a different URL or `QuizEnginePersistenceStore`. New files use a schema-1 property-list envelope with `schemaVersion` and `payload`; see [schema versions and dispatch](#schema-versions-and-dispatch) for what older documents do. The following are persistent contracts after first release:
+`PlayerProgressManager` stores progress in `Documents/player_progress.plist` unless the app injects a different URL or `QuizEnginePersistenceStore`. New files use a schema-2 property-list envelope with `schemaVersion` and `payload`; see [schema versions and dispatch](#schema-versions-and-dispatch) for what older documents do. The following are persistent contracts after first release:
 
 - category IDs;
 - achievement IDs;
@@ -24,12 +24,14 @@ Daily rewards, app/play streaks, reward-ad cooldowns, achievements, and daily/ho
 
 - `legacy` (0) — documents with no `schemaVersion` key at all, as written by `v0.1.x`;
 - `firstVersioned` (1) — the first released envelope version;
-- `current` — the envelope version this package writes;
-- `decodableEnvelopeVersions` — `firstVersioned...current`, every released envelope version that still decodes.
+- `current` (2) — the envelope version this package writes, adding the bounded reward-receipt ledger and durable Premium claim identity;
+- `decodableEnvelopeVersions` (1...2) — every versioned envelope that still decodes.
 
-Decoding dispatches on that range, not on equality with `current`. A document written at an earlier released schema loads, reports the version it was written at through `PersistenceStatus.loaded(schemaVersion:)`, and is promoted to `current` by the next save; recovery from a backup restores the historical document verbatim rather than promoting it. Only an unknown — that is, a future — version is rejected, as `PersistenceError.unsupportedSchema`. The import marker follows the same rule so an interrupted import stays recoverable across an upgrade.
+Decoding dispatches on that range, not on equality with `current`. A schema-0 document loads as `.loadedLegacy`; a schema-1 document loads as `.loaded(schemaVersion: 1)`; and a schema-2 document loads as `.loaded(schemaVersion: 2)`. Schema-0 and schema-1 progress default the receipt ledger to empty without changing existing balances. A legacy Premium-received flag is converted to a permanent legacy claim identity so migration cannot award that one-time bonus again.
 
-Shipping a new schema therefore means bumping `current`, keeping the previous release's fixture, and adding its migration coverage. It never means widening an equality check.
+The next successful save of schema 0 or schema 1 writes schema 2. Recovery from a prior-schema backup reports `.recoveredFromBackup`, restores that historical document verbatim, and leaves promotion until the next save. Only an unknown — that is, a future — version is rejected as `PersistenceError.unsupportedSchema`. The import marker follows the same rule so an interrupted import stays recoverable across an upgrade.
+
+Shipping a later schema therefore means bumping `current`, retaining the `v0.2.0` schema-1 fixture and every other historical fixture, and adding migration coverage from each prior supported schema. It never means widening an equality check or rewriting a historical fixture.
 
 ## Historical fixtures
 

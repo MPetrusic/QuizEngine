@@ -29,6 +29,16 @@ Configuration is immutable, `Sendable`, and intentionally not `Codable`. It desc
 
 The default anti-farming values deliberately preserve released Serbian behavior: correct-answer coins accrue before question five, while outcome bonuses are absent below five, halved for questions 5–9, and full from question 10. A stricter variant can raise `minimumQuestionsForAnyReward` so no coins accrue before its threshold.
 
+## Durable reward transactions
+
+Rewarded-ad coins must be committed with `PlayerProgressManager.recordRewardedAdReward(_:)`. The app supplies a stable receipt ID and semantic reward version in `RewardedAdRewardRequest`, but the awarded amount is owned by `rules.economy.rewardAd.coinReward`. The submitted amount must match that rule; the manager checks cooldown from `rules.economy.rewardAd.cooldownSeconds` inside the same transaction that updates coins, total earned, cooldown date, and the receipt.
+
+Premium bonus value is intentionally app-owned and is supplied in `PremiumBonusClaimRequest`. QuizEngine has no product catalog, so moving that amount into the engine rules would duplicate product policy that the app must already resolve with its authoritative entitlement state. The app supplies the stable receipt ID, semantic reward version, positive coin amount, and resolved entitlement; `claimPremiumBonus(_:)` atomically writes the balances, Premium-received flag, permanent claim identity, and receipt.
+
+Both APIs return `RewardTransactionOutcome`: `.recorded`, `.alreadyRecorded`, `.conflictingReceipt`, `.ineligible`, `.rejected`, or `.persistenceFailed`. A persistence failure rolls back every in-memory field and is safe to retry with the same request.
+
+Reward receipts use FIFO retention with a maximum of 256 entries. Premium claim version and fingerprint are persisted separately and never pruned, so evicting its receipt cannot make the one-time reward claimable again. A migrated legacy Premium-received flag also becomes a permanent claim identity.
+
 ## Validation
 
 `QuizRulesConfiguration.init` throws `QuizRulesValidationError` deterministically. It rejects negative economy inputs, non-positive gameplay durations, malformed probabilities, missing or inconsistent power-up entries, daily-tier gaps/overlaps, invalid session limits, and multiplayer thresholds outside the configured match size.
@@ -38,6 +48,8 @@ Daily tiers must start at day 0, be ordered and contiguous, use unique IDs and n
 ## Compatibility APIs
 
 Existing variant, service, game, and multiplayer initializers use `.serbianCompatible`. Existing `PowerUp.cost`, `allStreakTiers`, and multiplayer static constants remain Serbian-default compatibility views. Custom consumers must read costs, timers, and other UI values from their variant or view-model `rules` instead of those static compatibility values.
+
+`recordRewardAdWatched()`, `recordRewardAdWatched(coinsAwarded:)`, and `markPremiumBonusCoinsReceived()` remain deprecated source-compatibility bridges. The rewarded-ad bridges enforce cooldown and roll back a failed save, but have no durable callback identity and are not suitable for shipping reward fulfillment. The Premium bridge records only a permanent legacy claim marker; it does not award coins. New code must use the receipt-backed transaction APIs.
 
 Explicit legacy session-size/count overloads continue to honor their arguments. The exact no-count overloads on a variant-created `QuestionDataService` use configured session values.
 
