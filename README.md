@@ -15,10 +15,12 @@ Use the smallest product set your app needs:
 Add the public package at the exact validated release:
 
 ```swift
-.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.0")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.1")
 ```
 
 No repository credentials are required. Pin an exact release tag; do not use a moving branch as a production dependency.
+
+**Do not pin `0.2.0`.** It carries a multiplayer defect that loses coins, statistics, and the match receipt when a terminal result fails to save. `0.2.1` is the remediation; see the [changelog](CHANGELOG.md).
 
 Open [StarterQuiz](Examples/StarterQuiz/README.md) for a minimal runnable iOS app. Its [setup checklist](Docs/persistence-upgrades-troubleshooting.md#from-starterquiz-to-your-app) is the intended first integration path.
 
