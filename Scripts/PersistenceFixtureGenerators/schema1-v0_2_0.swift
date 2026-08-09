@@ -179,7 +179,10 @@ func json(_ progress: PlayerProgress) -> [String: Any] {
         ),
         "multiplayerMatchReceipts": progress.multiplayerMatchReceipts.map {
             ["matchID": $0.matchID, "fingerprint": $0.fingerprint]
-        }
+        },
+        // Reward receipts do not exist in v0.2.0. This is the value the current
+        // package must observe after decoding the released schema-1 document.
+        "rewardReceipts": [[String: Any]]()
     ]
     if let date = progress.lastAppOpenDate { value["lastAppOpenDate"] = isoString(date) }
     if let date = progress.lastDailyRewardClaimedDate { value["lastDailyRewardClaimedDate"] = isoString(date) }

@@ -66,6 +66,13 @@ struct ExpectedReceipt: Decodable {
     let fingerprint: String
 }
 
+struct ExpectedRewardReceipt: Decodable {
+    let receiptID: String
+    let kind: RewardReceiptKind
+    let fingerprint: String
+    let recordedAt: String?
+}
+
 struct ExpectedProgress: Decodable {
     let coins: Int
     let currentStreak: Int
@@ -103,6 +110,7 @@ struct ExpectedProgress: Decodable {
     let multiplayerTotalQuestionsCorrect: Int
     let powerUpCredits: [String: Int]
     let multiplayerMatchReceipts: [ExpectedReceipt]
+    let rewardReceipts: [ExpectedRewardReceipt]
     let lastAppOpenDate: String?
     let lastDailyRewardClaimedDate: String?
     let lastRewardAdWatchedDate: String?
@@ -550,11 +558,90 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
         }
     }
 
+    func testCommittedSchema1FixtureDefaultsRewardReceiptsAndPromotesToSchema2() throws {
+        let entry = try XCTUnwrap(
+            try manifest().fixtures.first { $0.path == "v0.2.0/player_progress_schema_1.plist" }
+        )
+        let expected = try XCTUnwrap(entry.expectedProgress)
+        let directory = try makeTemporaryDirectory()
+        let primaryURL = directory.appendingPathComponent("player_progress.plist")
+        try bundledFixtureData(entry).write(to: primaryURL)
+
+        let manager = try makeManager(
+            store: FileQuizEnginePersistenceStore(primaryURL: primaryURL)
+        )
+        XCTAssertEqual(manager.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertTrue(manager.progress.rewardReceipts.isEmpty)
+        XCTAssertEqual(manager.progress.coins, expected.coins)
+        XCTAssertEqual(manager.progress.totalCoinsEarned, expected.totalCoinsEarned)
+
+        manager.addCoins(0)
+        XCTAssertEqual(manager.persistenceStatus, .saved)
+        XCTAssertEqual(manager.progress.coins, expected.coins)
+        XCTAssertEqual(manager.progress.totalCoinsEarned, expected.totalCoinsEarned)
+
+        let promoted = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(
+                from: Data(contentsOf: primaryURL),
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(promoted["schemaVersion"] as? Int, 2)
+
+        let reloaded = try makeManager(
+            store: FileQuizEnginePersistenceStore(primaryURL: primaryURL)
+        )
+        XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 2))
+        XCTAssertTrue(reloaded.progress.rewardReceipts.isEmpty)
+        XCTAssertEqual(reloaded.progress.coins, expected.coins)
+        XCTAssertEqual(reloaded.progress.totalCoinsEarned, expected.totalCoinsEarned)
+    }
+
+    func testCurrentSchemaRoundTripsRewardReceiptLedger() throws {
+        let directory = try makeTemporaryDirectory()
+        let primaryURL = directory.appendingPathComponent("player_progress.plist")
+        let store = FileQuizEnginePersistenceStore(primaryURL: primaryURL)
+        let manager = try makeManager(store: store)
+        var target = manager.progress
+        target.rewardReceipts = [
+            RewardReceipt(
+                receiptID: "reward-request-0001",
+                kind: .rewardedAdCoins,
+                fingerprint: "rewarded-ad-coins|v1|25",
+                recordedAt: fixedNow
+            )
+        ]
+        let request = try PlayerProgressImportRequest(
+            identifier: "schema-2-ledger-probe",
+            sourceFingerprint: "schema-2-ledger-probe-v1",
+            progress: target
+        )
+
+        XCTAssertEqual(try manager.importProgress(request), .imported)
+        let document = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(
+                from: Data(contentsOf: primaryURL),
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(document["schemaVersion"] as? Int, 2)
+
+        let reloaded = try makeManager(
+            store: FileQuizEnginePersistenceStore(primaryURL: primaryURL)
+        )
+        XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 2))
+        XCTAssertEqual(reloaded.progress, target)
+        XCTAssertEqual(reloaded.progress.rewardReceipts, target.rewardReceipts)
+    }
+
     // MARK: Versioned schema dispatch
 
     func testSchemaDispatchDescribesEveryReleasedEnvelopeVersion() {
         XCTAssertEqual(QuizEnginePersistenceSchema.legacy, 0)
         XCTAssertEqual(QuizEnginePersistenceSchema.firstVersioned, 1)
+        XCTAssertEqual(QuizEnginePersistenceSchema.current, 2)
         XCTAssertGreaterThanOrEqual(
             QuizEnginePersistenceSchema.current,
             QuizEnginePersistenceSchema.firstVersioned
@@ -727,6 +814,13 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(
+            progress.rewardReceipts,
+            target.rewardReceipts,
+            "\(label) rewardReceipts",
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
             progress.multiplayerGamesPlayed,
             target.multiplayerGamesPlayed,
             "\(label) multiplayerGamesPlayed",
@@ -887,6 +981,31 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
             expected.multiplayerMatchReceipts.map(\.fingerprint),
             "multiplayerMatchReceipts fingerprints"
         )
+        check(
+            progress.rewardReceipts.map(\.receiptID),
+            expected.rewardReceipts.map(\.receiptID),
+            "rewardReceipts receiptIDs"
+        )
+        check(
+            progress.rewardReceipts.map(\.kind),
+            expected.rewardReceipts.map(\.kind),
+            "rewardReceipts kinds"
+        )
+        check(
+            progress.rewardReceipts.map(\.fingerprint),
+            expected.rewardReceipts.map(\.fingerprint),
+            "rewardReceipts fingerprints"
+        )
+        for (actual, want) in zip(progress.rewardReceipts, expected.rewardReceipts) {
+            assertDate(
+                actual.recordedAt,
+                matchesISO8601: want.recordedAt,
+                field: "rewardReceipts[\(actual.receiptID)].recordedAt",
+                label: label,
+                file: file,
+                line: line
+            )
+        }
 
         check(progress.categoryStats.keys.sorted(), expected.categoryStats.keys.sorted(), "categoryStats keys")
         for (category, want) in expected.categoryStats {

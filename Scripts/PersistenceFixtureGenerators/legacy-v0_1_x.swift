@@ -172,7 +172,8 @@ func json(_ progress: PlayerProgress) -> [String: Any] {
         // Fields that do not exist in the v0.1.x model. The current package defaults
         // them on load, and the migration tests assert exactly these defaults.
         "powerUpCredits": [String: Int](),
-        "multiplayerMatchReceipts": [[String: String]]()
+        "multiplayerMatchReceipts": [[String: String]](),
+        "rewardReceipts": [[String: Any]]()
     ]
     if let date = progress.lastAppOpenDate { value["lastAppOpenDate"] = isoString(date) }
     if let date = progress.lastDailyRewardClaimedDate { value["lastDailyRewardClaimedDate"] = isoString(date) }

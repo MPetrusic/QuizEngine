@@ -25,7 +25,7 @@ public enum QuizEnginePersistenceSchema {
     public static let firstVersioned = 1
 
     /// The envelope version written by the current package.
-    public static let current = 1
+    public static let current = 2
 
     /// Every envelope version this package can decode.
     public static var decodableEnvelopeVersions: ClosedRange<Int> {

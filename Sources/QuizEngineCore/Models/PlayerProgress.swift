@@ -255,6 +255,36 @@ public enum MultiplayerResultRecordingOutcome: Equatable, Sendable {
     case persistenceFailed(PersistenceError)
 }
 
+/// The semantic source of a durable coin-reward receipt.
+public enum RewardReceiptKind: String, Codable, Equatable, Sendable {
+    case rewardedAdCoins
+    case premiumBonusCoins
+}
+
+/// A durable record that a reward transaction has already been applied.
+///
+/// Transaction APIs own fingerprint construction and ledger retention. Keeping the
+/// persisted value vendor-neutral lets an app use provider or StoreKit transaction
+/// identifiers without importing either SDK into QuizEngine.
+public struct RewardReceipt: Codable, Equatable, Sendable {
+    public let receiptID: String
+    public let kind: RewardReceiptKind
+    public let fingerprint: String
+    public let recordedAt: Date?
+
+    public init(
+        receiptID: String,
+        kind: RewardReceiptKind,
+        fingerprint: String,
+        recordedAt: Date? = nil
+    ) {
+        self.receiptID = receiptID
+        self.kind = kind
+        self.fingerprint = fingerprint
+        self.recordedAt = recordedAt
+    }
+}
+
 public struct PlayerProgress: Codable, Equatable, Sendable {
     public var coins: Int
     public var currentStreak: Int
@@ -372,6 +402,9 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
     /// idempotent across presentation retries and process recreation.
     public var multiplayerMatchReceipts: [MultiplayerMatchReceipt]
 
+    /// Bounded durable history for receipt-backed rewarded-ad and Premium rewards.
+    public var rewardReceipts: [RewardReceipt]
+
     // MARK: - Memberwise Init
 
     public init(
@@ -415,6 +448,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         multiplayerTotalQuestionsAnswered: Int = 0,
         multiplayerTotalQuestionsCorrect: Int = 0,
         multiplayerMatchReceipts: [MultiplayerMatchReceipt] = [],
+        rewardReceipts: [RewardReceipt] = [],
         powerUpCredits: [PowerUp: Int] = [:]
     ) {
         self.coins = coins
@@ -457,6 +491,7 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         self.multiplayerTotalQuestionsAnswered = multiplayerTotalQuestionsAnswered
         self.multiplayerTotalQuestionsCorrect = multiplayerTotalQuestionsCorrect
         self.multiplayerMatchReceipts = multiplayerMatchReceipts
+        self.rewardReceipts = rewardReceipts
         self.powerUpCredits = powerUpCredits
     }
 
@@ -580,6 +615,17 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
                 forKey: .multiplayerMatchReceipts,
                 in: container,
                 debugDescription: "Multiplayer match receipts must be unique, bounded, and non-empty."
+            )
+        }
+
+        rewardReceipts = try container.decodeIfPresent([RewardReceipt].self, forKey: .rewardReceipts) ?? []
+        guard rewardReceipts.count <= 256,
+              Set(rewardReceipts.map(\.receiptID)).count == rewardReceipts.count,
+              rewardReceipts.allSatisfy({ !$0.receiptID.isEmpty && !$0.fingerprint.isEmpty }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rewardReceipts,
+                in: container,
+                debugDescription: "Reward receipts must be unique, bounded, and non-empty."
             )
         }
     }

@@ -304,6 +304,7 @@ let manifest: [String: Any] = [
         "Do not edit a fixture or this manifest by hand. Change the generator, rerun the regenerate command, and commit the new bytes and hashes together.",
         "expectedProgress and expectedPreferences record what the originating tag's own decoder read back out of the file it had just written. The migration tests assert those values through the current public load path.",
         "powerUpCredits and multiplayerMatchReceipts do not exist in the v0.1.x model. The values recorded for v0.1.x fixtures are the defaults the current package must apply on load.",
+        "rewardReceipts does not exist in any released fixture model. Its recorded empty value is the default the current package must apply when loading schema 0 or schema 1.",
         "identicalBytesWith is measured from the committed bytes. Releases with identical documents keep separate fixtures anyway, so a future divergence is caught per release.",
         "Fixture content is invented test data. No fixture contains a real player, device, account, credential, or other secret."
     ],

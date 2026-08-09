@@ -985,15 +985,18 @@ final class QuizEngineCoreTests: XCTestCase {
         var payload = try XCTUnwrap(document["payload"] as? [String: Any])
         payload.removeValue(forKey: "powerUpCredits")
         document["payload"] = payload
-        let legacySchemaOneData = try PropertyListSerialization.data(
+        let versionedData = try PropertyListSerialization.data(
             fromPropertyList: document,
             format: .binary,
             options: 0
         )
 
-        let manager = try makeManager(store: FakePersistenceStore(primaryData: legacySchemaOneData))
+        let manager = try makeManager(store: FakePersistenceStore(primaryData: versionedData))
 
-        XCTAssertEqual(manager.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertEqual(
+            manager.persistenceStatus,
+            .loaded(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
         XCTAssertTrue(manager.progress.powerUpCredits.isEmpty)
     }
 
@@ -1218,7 +1221,10 @@ final class QuizEngineCoreTests: XCTestCase {
 
         let reloaded = try makeManager(store: store)
         XCTAssertEqual(reloaded.coins, 125)
-        XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertEqual(
+            reloaded.persistenceStatus,
+            .loaded(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
 
         let propertyList = try XCTUnwrap(
             try PropertyListSerialization.propertyList(from: try XCTUnwrap(store.primaryData), options: [], format: nil) as? [String: Any]
@@ -1331,7 +1337,10 @@ final class QuizEngineCoreTests: XCTestCase {
         let manager = try makeManager(store: store)
 
         XCTAssertEqual(manager.coins, 777)
-        XCTAssertEqual(manager.persistenceStatus, .recoveredFromBackup(schemaVersion: 1))
+        XCTAssertEqual(
+            manager.persistenceStatus,
+            .recoveredFromBackup(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
         XCTAssertEqual(
             try PersistenceDocumentCodec.decode(
                 PlayerProgress.self,
