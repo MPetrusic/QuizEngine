@@ -111,6 +111,8 @@ struct ExpectedProgress: Decodable {
     let powerUpCredits: [String: Int]
     let multiplayerMatchReceipts: [ExpectedReceipt]
     let rewardReceipts: [ExpectedRewardReceipt]
+    let premiumBonusClaimedVersion: String?
+    let premiumBonusClaimedFingerprint: String?
     let lastAppOpenDate: String?
     let lastDailyRewardClaimedDate: String?
     let lastRewardAdWatchedDate: String?
@@ -572,6 +574,14 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
         )
         XCTAssertEqual(manager.persistenceStatus, .loaded(schemaVersion: 1))
         XCTAssertTrue(manager.progress.rewardReceipts.isEmpty)
+        XCTAssertEqual(
+            manager.progress.premiumBonusClaimedVersion,
+            expected.premiumBonusClaimedVersion
+        )
+        XCTAssertEqual(
+            manager.progress.premiumBonusClaimedFingerprint,
+            expected.premiumBonusClaimedFingerprint
+        )
         XCTAssertEqual(manager.progress.coins, expected.coins)
         XCTAssertEqual(manager.progress.totalCoinsEarned, expected.totalCoinsEarned)
 
@@ -594,6 +604,14 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
         )
         XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 2))
         XCTAssertTrue(reloaded.progress.rewardReceipts.isEmpty)
+        XCTAssertEqual(
+            reloaded.progress.premiumBonusClaimedVersion,
+            expected.premiumBonusClaimedVersion
+        )
+        XCTAssertEqual(
+            reloaded.progress.premiumBonusClaimedFingerprint,
+            expected.premiumBonusClaimedFingerprint
+        )
         XCTAssertEqual(reloaded.progress.coins, expected.coins)
         XCTAssertEqual(reloaded.progress.totalCoinsEarned, expected.totalCoinsEarned)
     }
@@ -610,8 +628,19 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
                 kind: .rewardedAdCoins,
                 fingerprint: "rewarded-ad-coins|v1|25",
                 recordedAt: fixedNow
+            ),
+            RewardReceipt(
+                receiptID: "verified-store-transaction-0001",
+                kind: .premiumBonusCoins,
+                fingerprint: "premium-bonus-coins|premium-welcome-v1|500",
+                recordedAt: fixedNow
             )
         ]
+        target.coins += 500
+        target.totalCoinsEarned += 500
+        target.hasReceivedPremiumBonusCoins = true
+        target.premiumBonusClaimedVersion = "premium-welcome-v1"
+        target.premiumBonusClaimedFingerprint = "premium-bonus-coins|premium-welcome-v1|500"
         let request = try PlayerProgressImportRequest(
             identifier: "schema-2-ledger-probe",
             sourceFingerprint: "schema-2-ledger-probe-v1",
@@ -634,6 +663,54 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
         XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 2))
         XCTAssertEqual(reloaded.progress, target)
         XCTAssertEqual(reloaded.progress.rewardReceipts, target.rewardReceipts)
+        XCTAssertEqual(reloaded.progress.premiumBonusClaimedVersion, "premium-welcome-v1")
+        XCTAssertEqual(
+            reloaded.progress.premiumBonusClaimedFingerprint,
+            "premium-bonus-coins|premium-welcome-v1|500"
+        )
+    }
+
+    func testCorruptSchema2PrimaryRecoversFromCommittedSchema1Backup() throws {
+        let entry = try XCTUnwrap(
+            try manifest().fixtures.first { $0.path == "v0.2.0/player_progress_schema_1.plist" }
+        )
+        let expected = try XCTUnwrap(entry.expectedProgress)
+        var document = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(
+                from: PersistenceDocumentCodec.encode(PlayerProgress.default),
+                options: [],
+                format: nil
+            ) as? [String: Any]
+        )
+        var payload = try XCTUnwrap(document["payload"] as? [String: Any])
+        payload["rewardReceipts"] = [
+            [
+                "receiptID": "duplicate-receipt",
+                "kind": RewardReceiptKind.rewardedAdCoins.rawValue,
+                "fingerprint": "first"
+            ],
+            [
+                "receiptID": "duplicate-receipt",
+                "kind": RewardReceiptKind.rewardedAdCoins.rawValue,
+                "fingerprint": "second"
+            ]
+        ]
+        document["payload"] = payload
+        let corruptSchema2 = try PropertyListSerialization.data(
+            fromPropertyList: document,
+            format: .binary,
+            options: 0
+        )
+        let store = FakePersistenceStore(
+            primaryData: corruptSchema2,
+            backupData: try bundledFixtureData(entry)
+        )
+
+        let manager = try makeManager(store: store)
+
+        XCTAssertEqual(manager.persistenceStatus, .recoveredFromBackup(schemaVersion: 1))
+        XCTAssertEqual(store.replacePrimaryAttemptCount, 0)
+        assertProgress(manager.progress, matches: expected, label: "schema-2 corrupt primary")
     }
 
     // MARK: Versioned schema dispatch
@@ -995,6 +1072,16 @@ final class PersistenceFixtureMigrationTests: XCTestCase {
             progress.rewardReceipts.map(\.fingerprint),
             expected.rewardReceipts.map(\.fingerprint),
             "rewardReceipts fingerprints"
+        )
+        check(
+            progress.premiumBonusClaimedVersion,
+            expected.premiumBonusClaimedVersion,
+            "premiumBonusClaimedVersion"
+        )
+        check(
+            progress.premiumBonusClaimedFingerprint,
+            expected.premiumBonusClaimedFingerprint,
+            "premiumBonusClaimedFingerprint"
         )
         for (actual, want) in zip(progress.rewardReceipts, expected.rewardReceipts) {
             assertDate(

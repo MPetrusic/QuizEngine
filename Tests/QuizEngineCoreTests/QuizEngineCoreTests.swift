@@ -662,7 +662,16 @@ final class QuizEngineCoreTests: XCTestCase {
         )
         XCTAssertEqual(try questionService.getQuestionsForMultiplayerMatch().count, 2)
 
-        manager.recordRewardAdWatched()
+        XCTAssertEqual(
+            manager.recordRewardedAdReward(
+                RewardedAdRewardRequest(
+                    receiptID: "custom-rules-ad-1",
+                    rewardVersion: "rewarded-ad-v1",
+                    coinAmount: 9
+                )
+            ),
+            .recorded
+        )
         XCTAssertEqual(manager.coins, 248)
         XCTAssertFalse(manager.canWatchRewardAd())
         XCTAssertEqual(manager.timeUntilNextRewardAd(), 30)
@@ -1087,7 +1096,16 @@ final class QuizEngineCoreTests: XCTestCase {
         manager.handleAppOpen()
         manager.updatePlayStreak()
         XCTAssertNotNil(manager.claimDailyReward())
-        manager.recordRewardAdWatched()
+        XCTAssertEqual(
+            manager.recordRewardedAdReward(
+                RewardedAdRewardRequest(
+                    receiptID: "clock-rollback-ad-1",
+                    rewardVersion: "rewarded-ad-v1",
+                    coinAmount: variant.rules.economy.rewardAd.coinReward
+                )
+            ),
+            .recorded
+        )
         let coinsAfterRewards = manager.coins
 
         clock.setNow(initialDate.addingTimeInterval(-86_400))
