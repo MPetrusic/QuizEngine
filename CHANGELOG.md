@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.1
 
-Remediation of the audited v0.2.0 release blockers, proposed as `v0.2.1`. The published `v0.2.0` tag is unchanged; nothing in this section rewrites it.
+Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag is unchanged; nothing in this section rewrites it.
 
 ### Correction to the published v0.2.0 notes
 
