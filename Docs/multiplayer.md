@@ -44,4 +44,27 @@ Because nothing reaches a payload handler out of order, pause and resume, round 
 
 Configuration and ready deadlines end the match directly with `MultiplayerSessionFailure.timedOut`. A pause deadline and an exhausted question-result retry escalate to a disconnect, which terminates once after its grace period. Ready and question-result deadlines retry twice before escalating.
 
-Supply the shared `PlayerProgressManager` to `MultiplayerQuizViewModel`. Its match-ID receipt persists with multiplayer statistics and coins, preventing repeated terminal presentation, reconnect callbacks, and process recreation from awarding twice.
+## Terminal commit and retry
+
+Supply the shared `PlayerProgressManager` to `MultiplayerQuizViewModel`. A terminal result is not applied by a boolean "already handled" flag; it moves through an explicit commit state that the app can observe on `terminalCommitState`:
+
+| State | Meaning |
+| --- | --- |
+| `idle` | No terminal record has been prepared. |
+| `pending(record)` | Immutable terminal data exists but is **not** durably committed. |
+| `committing(record)` | A commit attempt is in flight. |
+| `committed(receiptID:)` | The durable receipt exists. |
+
+Entering `pending` builds one immutable `MultiplayerTerminalRecord` from stable inputs only — match ID, local role, terminal reason, both final scores, questions completed and correct, awarded coins, and response times — plus a canonical fingerprint derived from exactly those fields. The fingerprint never incorporates localized strings, `String(describing:)`, object identity, the current time, or view state, so the same match produces the same fingerprint in a different process, locale, or time zone.
+
+The state becomes `committed` only after the manager reports `.recorded` or `.alreadyRecorded`. This is the property v0.2.0 lacked: there, the guard was set before the save, so a failed write lost the result permanently.
+
+**A retryable persistence failure returns the record to `pending` and keeps it.** Call `retryPendingTerminalCommit()` to attempt it again; an automatic retry, if used, runs through the injected `QuizEngineScheduler` under a bounded policy, never an unbounded loop. Coins, statistics, and the receipt are written in one `PlayerProgressManager` transaction, so a failed save leaves no partial mutation in memory or on disk.
+
+Duplicate delivery is harmless at every point. Before commit it is folded into the same pending record; during commit it does not start a second write; after commit it converges to `.alreadyRecorded` without a second award. A recreated view model that receives the same record and stable match ID reaches `.alreadyRecorded` rather than awarding again.
+
+A **conflicting receipt** — the same match ID already recorded under a different fingerprint — is surfaced as a typed failure and never applied. It is not silently treated as a duplicate, because a mismatch means either tampering or a nondeterministic terminal calculation, and both need to be visible.
+
+Completion analytics sit on the durable receipt boundary: emitted once after `.recorded`, never after `.alreadyRecorded`, and never on a failed or conflicting commit.
+
+Permanently invalid input and arithmetic overflow are rejected outright rather than retried, and leave progress untouched.
