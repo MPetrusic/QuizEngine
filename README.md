@@ -66,8 +66,9 @@ The package validates positive unique IDs, declared categories, four non-empty d
 - [Optional multiplayer](Docs/multiplayer.md)
 - [Persistence, upgrades, and troubleshooting](Docs/persistence-upgrades-troubleshooting.md)
 - [Deterministic testing](Docs/testing.md)
+- [Public API compatibility and migration](Docs/api-compatibility-and-migration.md)
 - [Release checklist](Docs/release-checklist.md)
-- [v0.2.0 release validation and migration handoff](Docs/v0.2.0-release-validation-and-migration-handoff.md)
+- [v0.2.0 release validation and migration handoff](Docs/v0.2.0-release-validation-and-migration-handoff.md) — historical pre-tag record; read its status note first
 
 ## Verification
 

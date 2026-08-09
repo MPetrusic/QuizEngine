@@ -21,6 +21,7 @@ public enum QuizContentValidationIssue: Equatable, Sendable {
     case duplicateQuestionID(questionIndex: Int, id: Int)
     case missingCategories(questionIndex: Int)
     case unknownCategory(questionIndex: Int, categoryID: String)
+    case duplicateCategory(questionIndex: Int, categoryID: String)
     case invalidAnswerCount(questionIndex: Int, count: Int)
     case emptyAnswerText(questionIndex: Int, answerIndex: Int, text: String)
     case duplicateAnswerText(questionIndex: Int, answerIndex: Int, text: String)
@@ -29,6 +30,10 @@ public enum QuizContentValidationIssue: Equatable, Sendable {
 }
 
 /// Validates reusable question structure without loading files, inspecting app assets, or mutating state.
+///
+/// Every structural rule comes from `QuizQuestionStructureRules`, which the multiplayer wire
+/// validator also uses. This validator adds only the set-level rule that a question ID must be
+/// unique across the supplied content.
 public enum QuizContentValidator {
     /// Validates decoded questions against the canonical category IDs declared by the consumer variant.
     ///
@@ -44,75 +49,52 @@ public enum QuizContentValidator {
 
         for (questionIndex, question) in questionData.questions.enumerated() {
             let isDuplicateID = !seenQuestionIDs.insert(question.id).inserted
-            if question.id <= 0 {
-                issues.append(.nonPositiveQuestionID(questionIndex: questionIndex, id: question.id))
-            }
+            let structureIssues = QuizQuestionStructureRules.issues(
+                in: question,
+                allowedCategoryIDs: knownCategoryIDs
+            )
+
+            var questionIssues = structureIssues.map { mapped($0, questionIndex: questionIndex) }
             if isDuplicateID {
-                issues.append(.duplicateQuestionID(questionIndex: questionIndex, id: question.id))
-            }
-
-            if question.categories.isEmpty {
-                issues.append(.missingCategories(questionIndex: questionIndex))
-            } else {
-                for categoryID in question.categories where !knownCategoryIDs.contains(categoryID) {
-                    issues.append(.unknownCategory(questionIndex: questionIndex, categoryID: categoryID))
-                }
-            }
-
-            if question.answers.count != 4 {
-                issues.append(.invalidAnswerCount(questionIndex: questionIndex, count: question.answers.count))
-            }
-
-            var normalizedAnswers = Set<String>()
-            for (answerIndex, answer) in question.answers.enumerated() {
-                guard !answer.text.isEmpty, !answer.text.allSatisfy(\.isWhitespace) else {
-                    issues.append(
-                        .emptyAnswerText(
-                            questionIndex: questionIndex,
-                            answerIndex: answerIndex,
-                            text: answer.text
-                        )
-                    )
-                    continue
-                }
-
-                let normalizedText = normalizedAnswerText(answer.text)
-                if !normalizedAnswers.insert(normalizedText).inserted {
-                    issues.append(
-                        .duplicateAnswerText(
-                            questionIndex: questionIndex,
-                            answerIndex: answerIndex,
-                            text: answer.text
-                        )
-                    )
-                }
-            }
-
-            let correctAnswerCount = question.answers.count(where: \.correct)
-            if correctAnswerCount != 1 {
-                issues.append(
-                    .invalidCorrectAnswerCount(
-                        questionIndex: questionIndex,
-                        count: correctAnswerCount
-                    )
+                // The non-positive ID rule is always first when it applies, so a duplicate ID
+                // reports directly after it and the aggregate order stays stable.
+                let insertionIndex = question.id <= 0 ? 1 : 0
+                questionIssues.insert(
+                    .duplicateQuestionID(questionIndex: questionIndex, id: question.id),
+                    at: insertionIndex
                 )
             }
-
-            if !(1...3).contains(question.difficulty) {
-                issues.append(
-                    .invalidDifficulty(questionIndex: questionIndex, difficulty: question.difficulty)
-                )
-            }
+            issues.append(contentsOf: questionIssues)
         }
 
         return QuizContentValidationResult(issues: issues)
     }
 
-    private static func normalizedAnswerText(_ text: String) -> String {
-        let collapsedWhitespace = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return collapsedWhitespace.folding(
-            options: .caseInsensitive,
-            locale: Locale(identifier: "en_US_POSIX")
-        )
+    private static func mapped(
+        _ issue: QuizQuestionStructureIssue,
+        questionIndex: Int
+    ) -> QuizContentValidationIssue {
+        switch issue {
+        case .nonPositiveID(let id):
+            return .nonPositiveQuestionID(questionIndex: questionIndex, id: id)
+        case .missingCategories:
+            return .missingCategories(questionIndex: questionIndex)
+        // A blank category can never be a canonical variant ID, so local content reports it
+        // with the same issue an unrecognized ID produces.
+        case .blankCategory(_, let categoryID), .unknownCategory(_, let categoryID):
+            return .unknownCategory(questionIndex: questionIndex, categoryID: categoryID)
+        case .duplicateCategory(_, let categoryID):
+            return .duplicateCategory(questionIndex: questionIndex, categoryID: categoryID)
+        case .invalidAnswerCount(let count):
+            return .invalidAnswerCount(questionIndex: questionIndex, count: count)
+        case .blankAnswerText(let answerIndex, let text):
+            return .emptyAnswerText(questionIndex: questionIndex, answerIndex: answerIndex, text: text)
+        case .duplicateAnswerText(let answerIndex, let text):
+            return .duplicateAnswerText(questionIndex: questionIndex, answerIndex: answerIndex, text: text)
+        case .invalidCorrectAnswerCount(let count):
+            return .invalidCorrectAnswerCount(questionIndex: questionIndex, count: count)
+        case .invalidDifficulty(let difficulty):
+            return .invalidDifficulty(questionIndex: questionIndex, difficulty: difficulty)
+        }
     }
 }

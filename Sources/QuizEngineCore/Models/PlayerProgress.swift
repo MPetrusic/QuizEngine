@@ -255,7 +255,94 @@ public enum MultiplayerResultRecordingOutcome: Equatable, Sendable {
     case persistenceFailed(PersistenceError)
 }
 
+/// The semantic source of a durable coin-reward receipt.
+public enum RewardReceiptKind: String, Codable, Equatable, Sendable {
+    case rewardedAdCoins
+    case premiumBonusCoins
+}
+
+/// A durable record that a reward transaction has already been applied.
+///
+/// Transaction APIs own fingerprint construction and ledger retention. Keeping the
+/// persisted value vendor-neutral lets an app use provider or StoreKit transaction
+/// identifiers without importing either SDK into QuizEngine.
+public struct RewardReceipt: Codable, Equatable, Sendable {
+    public let receiptID: String
+    public let kind: RewardReceiptKind
+    public let fingerprint: String
+    public let recordedAt: Date?
+
+    public init(
+        receiptID: String,
+        kind: RewardReceiptKind,
+        fingerprint: String,
+        recordedAt: Date? = nil
+    ) {
+        self.receiptID = receiptID
+        self.kind = kind
+        self.fingerprint = fingerprint
+        self.recordedAt = recordedAt
+    }
+}
+
+/// A provider-earned rewarded-ad callback submitted for durable recording.
+///
+/// The submitted amount participates in conflict detection, but it must equal the
+/// variant's validated reward-ad value; the callback cannot override policy.
+public struct RewardedAdRewardRequest: Equatable, Sendable {
+    public let receiptID: String
+    public let rewardVersion: String
+    public let coinAmount: Int
+
+    public init(receiptID: String, rewardVersion: String, coinAmount: Int) {
+        self.receiptID = receiptID
+        self.rewardVersion = rewardVersion
+        self.coinAmount = coinAmount
+    }
+}
+
+/// A verified Premium entitlement submitted for one atomic bonus claim.
+///
+/// Premium bonus value remains app-owned because QuizEngine has no product catalog.
+/// A consumer supplies the configured amount only after it has resolved an
+/// authoritative entitlement state.
+public struct PremiumBonusClaimRequest: Equatable, Sendable {
+    public let receiptID: String
+    public let rewardVersion: String
+    public let coinAmount: Int
+    public let isEntitled: Bool
+
+    public init(
+        receiptID: String,
+        rewardVersion: String,
+        coinAmount: Int,
+        isEntitled: Bool
+    ) {
+        self.receiptID = receiptID
+        self.rewardVersion = rewardVersion
+        self.coinAmount = coinAmount
+        self.isEntitled = isEntitled
+    }
+}
+
+/// The durable result of a rewarded-ad or Premium coin transaction.
+public enum RewardTransactionOutcome: Equatable, Sendable {
+    case recorded
+    case alreadyRecorded
+    case conflictingReceipt
+    case ineligible
+    case rejected
+    case persistenceFailed(PersistenceError)
+}
+
 public struct PlayerProgress: Codable, Equatable, Sendable {
+    static let legacyPremiumBonusClaimIdentity = "legacy-unversioned"
+
+    /// Reward receipts use FIFO retention. Older rewarded-ad receipts can be
+    /// discarded after this many entries; Premium claim identity is retained
+    /// separately and is never pruned.
+    public static let maximumRewardReceiptCount = 256
+
     public var coins: Int
     public var currentStreak: Int
     public var longestStreak: Int
@@ -372,6 +459,16 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
     /// idempotent across presentation retries and process recreation.
     public var multiplayerMatchReceipts: [MultiplayerMatchReceipt]
 
+    /// Bounded durable history for receipt-backed rewarded-ad and Premium rewards.
+    public var rewardReceipts: [RewardReceipt]
+
+    /// Non-evictable semantic Premium claim identity.
+    ///
+    /// The bounded receipt ledger may discard the corresponding receipt, but these
+    /// fields permanently preserve the one-time claim and its canonical contents.
+    public var premiumBonusClaimedVersion: String?
+    public var premiumBonusClaimedFingerprint: String?
+
     // MARK: - Memberwise Init
 
     public init(
@@ -415,6 +512,9 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         multiplayerTotalQuestionsAnswered: Int = 0,
         multiplayerTotalQuestionsCorrect: Int = 0,
         multiplayerMatchReceipts: [MultiplayerMatchReceipt] = [],
+        rewardReceipts: [RewardReceipt] = [],
+        premiumBonusClaimedVersion: String? = nil,
+        premiumBonusClaimedFingerprint: String? = nil,
         powerUpCredits: [PowerUp: Int] = [:]
     ) {
         self.coins = coins
@@ -457,6 +557,16 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
         self.multiplayerTotalQuestionsAnswered = multiplayerTotalQuestionsAnswered
         self.multiplayerTotalQuestionsCorrect = multiplayerTotalQuestionsCorrect
         self.multiplayerMatchReceipts = multiplayerMatchReceipts
+        self.rewardReceipts = rewardReceipts
+        if hasReceivedPremiumBonusCoins,
+           premiumBonusClaimedVersion == nil,
+           premiumBonusClaimedFingerprint == nil {
+            self.premiumBonusClaimedVersion = Self.legacyPremiumBonusClaimIdentity
+            self.premiumBonusClaimedFingerprint = Self.legacyPremiumBonusClaimIdentity
+        } else {
+            self.premiumBonusClaimedVersion = premiumBonusClaimedVersion
+            self.premiumBonusClaimedFingerprint = premiumBonusClaimedFingerprint
+        }
         self.powerUpCredits = powerUpCredits
     }
 
@@ -582,9 +692,61 @@ public struct PlayerProgress: Codable, Equatable, Sendable {
                 debugDescription: "Multiplayer match receipts must be unique, bounded, and non-empty."
             )
         }
+
+        rewardReceipts = try container.decodeIfPresent([RewardReceipt].self, forKey: .rewardReceipts) ?? []
+        guard rewardReceipts.count <= Self.maximumRewardReceiptCount,
+              Set(rewardReceipts.map(\.receiptID)).count == rewardReceipts.count,
+              rewardReceipts.allSatisfy({ !$0.receiptID.isEmpty && !$0.fingerprint.isEmpty }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .rewardReceipts,
+                in: container,
+                debugDescription: "Reward receipts must be unique, bounded, and non-empty."
+            )
+        }
+
+        premiumBonusClaimedVersion = try container.decodeIfPresent(
+            String.self,
+            forKey: .premiumBonusClaimedVersion
+        )
+        premiumBonusClaimedFingerprint = try container.decodeIfPresent(
+            String.self,
+            forKey: .premiumBonusClaimedFingerprint
+        )
+        if hasReceivedPremiumBonusCoins,
+           premiumBonusClaimedVersion == nil,
+           premiumBonusClaimedFingerprint == nil {
+            // Released schema-0/schema-1 documents only carried the Boolean. Treat
+            // that state as a permanent unversioned claim so migration cannot award
+            // a second bonus whose original amount and version are unknowable.
+            premiumBonusClaimedVersion = Self.legacyPremiumBonusClaimIdentity
+            premiumBonusClaimedFingerprint = Self.legacyPremiumBonusClaimIdentity
+        }
+        let hasClaimIdentity = premiumBonusClaimedVersion != nil || premiumBonusClaimedFingerprint != nil
+        guard hasClaimIdentity == hasReceivedPremiumBonusCoins,
+              premiumBonusClaimedVersion?.isEmpty != true,
+              premiumBonusClaimedFingerprint?.isEmpty != true,
+              (premiumBonusClaimedVersion == nil) == (premiumBonusClaimedFingerprint == nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .premiumBonusClaimedVersion,
+                in: container,
+                debugDescription: "Premium bonus claimed state must be complete, non-empty, and consistent."
+            )
+        }
     }
 
     // MARK: - Date Formatting
+
+    /// Source-compatible daily-stat formatter from v0.1.2.
+    ///
+    /// A new formatter is returned for every access so callers cannot mutate shared
+    /// engine state. New code should use ``dateKey(for:calendar:)`` instead.
+    @available(*, deprecated, message: "Use dateKey(for:calendar:) with an explicit calendar.")
+    public static var dailyStatsDateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        return formatter
+    }
 
     /// Returns the date key for today
     public static var todayKey: String {

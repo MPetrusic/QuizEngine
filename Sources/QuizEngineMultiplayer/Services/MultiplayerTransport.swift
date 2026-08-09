@@ -56,12 +56,19 @@ public enum MultiplayerMatchConfigurationError: Error, Equatable, Sendable {
     case invalidContentVersion
     case invalidAnalyticsTransportLabel
     case missingRequiredCapabilities
+    case invalidExpectedQuestionCount
+    case invalidAllowedCategoryIDs
 }
 
-/// App-owned match identity and compatibility policy. Content versions must
+/// App-owned match identity, content policy, and compatibility policy. Content versions must
 /// match exactly; the package does not infer them from an app bundle.
+///
+/// The content policy is what lets the coordinator apply the same structural rules to a
+/// peer-supplied configuration that `QuizContentValidator` applies to local content, and to
+/// check awarded points against the rules the match is actually being played under.
 public struct MultiplayerMatchConfiguration: Equatable, Sendable {
     public static let protocolVersion = 1
+    public static let maximumQuestionCount = 100
     public static let requiredQE6Capabilities: Set<MultiplayerCapability> = [
         .sequencedEnvelopeV1,
         .validatedPayloadV1,
@@ -73,11 +80,26 @@ public struct MultiplayerMatchConfiguration: Equatable, Sendable {
     public let requiredCapabilities: Set<MultiplayerCapability>
     public let analyticsTransportLabel: String
 
+    /// The exact question count a hardened game configuration must carry, from
+    /// `rules.sessions.multiplayerQuestionCount`.
+    public let expectedQuestionCount: Int
+
+    /// The canonical category IDs declared by the selected variant. A wire question may not
+    /// reference any other category.
+    public let allowedCategoryIDs: Set<String>
+
+    /// The scoring and timing rules the match is played under. Awarded points and score
+    /// progression are validated against these rather than against broad constants.
+    public let multiplayerRules: QuizMultiplayerRules
+
     public init(
         protocolVersion: Int = MultiplayerMatchConfiguration.protocolVersion,
         contentVersion: String,
         requiredCapabilities: Set<MultiplayerCapability> = MultiplayerMatchConfiguration.requiredQE6Capabilities,
-        analyticsTransportLabel: String
+        analyticsTransportLabel: String,
+        expectedQuestionCount: Int,
+        allowedCategoryIDs: Set<String>,
+        multiplayerRules: QuizMultiplayerRules
     ) throws {
         guard protocolVersion > 0 else { throw MultiplayerMatchConfigurationError.invalidProtocolVersion }
         guard !contentVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -91,10 +113,41 @@ public struct MultiplayerMatchConfiguration: Equatable, Sendable {
         guard requiredCapabilities.isSuperset(of: MultiplayerMatchConfiguration.requiredQE6Capabilities) else {
             throw MultiplayerMatchConfigurationError.missingRequiredCapabilities
         }
+        guard expectedQuestionCount > 0,
+              expectedQuestionCount <= MultiplayerMatchConfiguration.maximumQuestionCount else {
+            throw MultiplayerMatchConfigurationError.invalidExpectedQuestionCount
+        }
+        guard !allowedCategoryIDs.isEmpty,
+              allowedCategoryIDs.allSatisfy({ !QuizQuestionStructureRules.isBlank($0) && $0.utf8.count <= 128 }) else {
+            throw MultiplayerMatchConfigurationError.invalidAllowedCategoryIDs
+        }
         self.protocolVersion = protocolVersion
         self.contentVersion = contentVersion
         self.requiredCapabilities = requiredCapabilities
         self.analyticsTransportLabel = analyticsTransportLabel
+        self.expectedQuestionCount = expectedQuestionCount
+        self.allowedCategoryIDs = allowedCategoryIDs
+        self.multiplayerRules = multiplayerRules
+    }
+
+    /// Derives the content policy from the variant both peers are playing, so the match cannot
+    /// disagree with the engine rules the app already configured.
+    public init(
+        variant: QuizVariantDefinition,
+        contentVersion: String,
+        analyticsTransportLabel: String,
+        protocolVersion: Int = MultiplayerMatchConfiguration.protocolVersion,
+        requiredCapabilities: Set<MultiplayerCapability> = MultiplayerMatchConfiguration.requiredQE6Capabilities
+    ) throws {
+        try self.init(
+            protocolVersion: protocolVersion,
+            contentVersion: contentVersion,
+            requiredCapabilities: requiredCapabilities,
+            analyticsTransportLabel: analyticsTransportLabel,
+            expectedQuestionCount: variant.rules.sessions.multiplayerQuestionCount,
+            allowedCategoryIDs: Set(variant.categories.map(\.id)),
+            multiplayerRules: variant.rules.multiplayer
+        )
     }
 }
 
@@ -105,6 +158,9 @@ public enum MultiplayerHandshakeStatus: Equatable, Sendable {
     case rejected(MultiplayerSessionFailure)
 }
 
+/// The deterministic reason a hardened session reached a terminal state.
+///
+/// The first failure recorded for a session is authoritative; later events cannot replace it.
 public enum MultiplayerSessionFailure: Equatable, Sendable {
     case unsupportedWireTransport
     case protocolMismatch
@@ -113,6 +169,31 @@ public enum MultiplayerSessionFailure: Equatable, Sendable {
     case malformedPayload
     case unexpectedMessage
     case wrongSender
+    /// A game configuration failed the shared structural rules or the match content policy.
+    case invalidConfiguration
+    /// A round payload could not be valid for the active round, question, or scoring rules.
+    case invalidRoundPayload
+    /// A message was legal in another phase but not in the phase the session is in.
+    case unexpectedPhase
+    /// A missing sequence exceeded the buffering window or was never resolved in time.
+    case sequenceGap
+    /// More out-of-order messages arrived than the bounded buffer accepts.
+    case sequenceBufferOverflow
+    /// The app-owned transport refused to send.
+    case transportFailure
+    /// A phase-specific deadline elapsed without the expected message.
+    case timedOut(MultiplayerTimeout)
+}
+
+/// The deadline that elapsed when a session ends with `MultiplayerSessionFailure.timedOut`.
+public enum MultiplayerTimeout: String, Equatable, Sendable {
+    case gameConfiguration
+    case ready
+    case questionResult
+    case pause
+    case gameEnd
+    case sequenceGap
+    case reconnection
 }
 
 public struct MultiplayerHandshakePayload: Codable, Equatable, Sendable {

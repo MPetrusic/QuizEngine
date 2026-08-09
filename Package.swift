@@ -22,7 +22,15 @@ let package = Package(
         .testTarget(
             name: "QuizEngineCoreTests",
             dependencies: ["QuizEngineCore", "QuizEngineTestSupport"],
-            resources: [.process("Resources")]
+            resources: [
+                .process("Resources/alternate_questions.json"),
+                // Historical persistence fixtures are copied verbatim, not processed.
+                // `.process` flattens the directory tree, and the four v0.1.x releases
+                // deliberately keep separate fixtures under identical file names, so
+                // processing them collides. Copying also guarantees the committed bytes
+                // are the bytes the migration tests hash.
+                .copy("Resources/PersistenceFixtures"),
+            ]
         ),
         .testTarget(name: "QuizEngineGameTests", dependencies: ["QuizEngineGame", "QuizEngineCore", "QuizEngineTestSupport"]),
         .testTarget(

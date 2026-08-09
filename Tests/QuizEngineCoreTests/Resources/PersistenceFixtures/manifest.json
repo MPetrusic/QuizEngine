@@ -1,0 +1,1461 @@
+{
+  "fixtures" : [
+    {
+      "byteCount" : 965,
+      "commit" : "46c08c3513550fed6daa96c7c82e052c39877a90",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 0,
+        "bestSingleSessionScore" : 0,
+        "bestSingleSessionStreak" : 0,
+        "categoryStats" : {
+
+        },
+        "coins" : 100,
+        "currentPlayStreak" : 0,
+        "currentStreak" : 0,
+        "dailyStats" : {
+
+        },
+        "hasReceivedPremiumBonusCoins" : false,
+        "hourlyPerformance" : {
+
+        },
+        "lifetimeAverageResponseTimeMs" : 0,
+        "lifetimeGamesPlayed" : 0,
+        "lifetimeQuestionsAnswered" : 0,
+        "lifetimeQuestionsCorrect" : 0,
+        "lifetimeResponseTimeSamples" : 0,
+        "longestMultiplayerWinStreak" : 0,
+        "longestPlayStreak" : 0,
+        "longestStreak" : 0,
+        "manuallyUnlockedCategories" : [
+
+        ],
+        "multiplayerGamesDraw" : 0,
+        "multiplayerGamesLost" : 0,
+        "multiplayerGamesPlayed" : 0,
+        "multiplayerGamesWon" : 0,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 0,
+        "multiplayerTotalQuestionsCorrect" : 0,
+        "multiplayerTotalResponseTimeMs" : 0,
+        "multiplayerWinStreak" : 0,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+
+        ],
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+
+        ],
+        "totalCoinsEarned" : 100,
+        "totalCoinsSpent" : 0,
+        "unlockedAchievements" : [
+
+        ],
+        "unlockedPacks" : [
+
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nA v0.1.0 PlayerProgressManager was created against an empty isolated directory, so it held PlayerProgress.default, and addCoins(0) triggered the tag's own first save without changing any field. These bytes are therefore exactly what a brand-new v0.1.0 install writes.",
+      "identicalBytesWith" : [
+        "v0.1.1/player_progress_default.plist",
+        "v0.1.2/player_progress_default.plist",
+        "v0.1.3/player_progress_default.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.0/player_progress_default.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through addCoins(0)",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "5e5db6460b70296a469d7dc99b709d60c3f398bf241684669904ea67018c3904",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.0"
+    },
+    {
+      "byteCount" : 2118,
+      "commit" : "46c08c3513550fed6daa96c7c82e052c39877a90",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 780,
+        "bestSingleSessionScore" : 1300,
+        "bestSingleSessionStreak" : 21,
+        "categoryStats" : {
+          "geography" : {
+            "bestScore" : 1180,
+            "correctlyAnsweredIDs" : [
+              5,
+              9,
+              23
+            ],
+            "questionsAnswered" : 96,
+            "questionsCorrect" : 91,
+            "questionsCountAtHundredPercent" : 120
+          },
+          "history" : {
+            "bestScore" : 940,
+            "correctlyAnsweredIDs" : [
+              3,
+              17,
+              42,
+              88,
+              101
+            ],
+            "questionsAnswered" : 142,
+            "questionsCorrect" : 118
+          },
+          "science" : {
+            "bestScore" : 640,
+            "correctlyAnsweredIDs" : [
+              207
+            ],
+            "questionsAnswered" : 2,
+            "questionsCorrect" : 1
+          }
+        },
+        "coins" : 1315,
+        "currentPlayStreak" : 4,
+        "currentStreak" : 7,
+        "dailyStats" : {
+          "2025-03-12" : {
+            "correctByDifficulty" : {
+              "1" : 9,
+              "2" : 7,
+              "3" : 3
+            },
+            "gamesPlayed" : 2,
+            "questionsAnswered" : 24,
+            "questionsByDifficulty" : {
+              "1" : 10,
+              "2" : 9,
+              "3" : 5
+            },
+            "questionsCorrect" : 19,
+            "totalResponseTimeMs" : 138400
+          },
+          "2025-03-13" : {
+            "correctByDifficulty" : {
+              "1" : 12,
+              "2" : 11,
+              "3" : 4
+            },
+            "gamesPlayed" : 3,
+            "questionsAnswered" : 31,
+            "questionsByDifficulty" : {
+              "1" : 12,
+              "2" : 13,
+              "3" : 6
+            },
+            "questionsCorrect" : 27,
+            "totalResponseTimeMs" : 171950
+          },
+          "2025-03-14" : {
+            "correctByDifficulty" : {
+              "1" : 3,
+              "2" : 2,
+              "3" : 1
+            },
+            "gamesPlayed" : 1,
+            "questionsAnswered" : 8,
+            "questionsByDifficulty" : {
+              "1" : 3,
+              "2" : 3,
+              "3" : 2
+            },
+            "questionsCorrect" : 6,
+            "totalResponseTimeMs" : 41300
+          }
+        },
+        "hasReceivedPremiumBonusCoins" : true,
+        "hourlyPerformance" : {
+          "9" : {
+            "questionsAnswered" : 48,
+            "questionsCorrect" : 39,
+            "sessionCount" : 5
+          },
+          "18" : {
+            "questionsAnswered" : 133,
+            "questionsCorrect" : 104,
+            "sessionCount" : 12
+          },
+          "21" : {
+            "questionsAnswered" : 77,
+            "questionsCorrect" : 68,
+            "sessionCount" : 9
+          }
+        },
+        "lastAppOpenDate" : "2025-03-14T09:15:00Z",
+        "lastDailyRewardClaimedDate" : "2025-03-14T09:16:30Z",
+        "lastPlayedDate" : "2025-03-13T21:30:00Z",
+        "lastRewardAdWatchedDate" : "2025-03-13T18:45:00Z",
+        "lifetimeAverageResponseTimeMs" : 5742,
+        "lifetimeGamesPlayed" : 64,
+        "lifetimePowerUpsUsed" : 35,
+        "lifetimeQuestionsAnswered" : 824,
+        "lifetimeQuestionsCorrect" : 665,
+        "lifetimeResponseTimeSamples" : 812,
+        "longestMultiplayerWinStreak" : 6,
+        "longestPlayStreak" : 11,
+        "longestStreak" : 23,
+        "manuallyUnlockedCategories" : [
+          "culture"
+        ],
+        "multiplayerGamesDraw" : 2,
+        "multiplayerGamesLost" : 5,
+        "multiplayerGamesPlayed" : 19,
+        "multiplayerGamesWon" : 12,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 190,
+        "multiplayerTotalQuestionsCorrect" : 149,
+        "multiplayerTotalResponseTimeMs" : 107100,
+        "multiplayerWinStreak" : 4,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+          "fiftyFifty",
+          "skipQuestion",
+          "streakShield",
+          "timeFreeze"
+        ],
+        "premiumBonusClaimedFingerprint" : "legacy-unversioned",
+        "premiumBonusClaimedVersion" : "legacy-unversioned",
+        "previousAppOpenDate" : "2025-03-12T20:05:00Z",
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+          3,
+          5,
+          9,
+          17,
+          23,
+          42,
+          88,
+          101,
+          150,
+          207,
+          208,
+          301
+        ],
+        "totalCoinsEarned" : 4920,
+        "totalCoinsSpent" : 3605,
+        "unlockedAchievements" : [
+          "first_win",
+          "history_50",
+          "science_starter",
+          "streak_7"
+        ],
+        "unlockedPacks" : [
+          "history-expansion",
+          "starter-pack"
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nAn invented prior-session PlayerProgress was encoded with v0.1.0's own model and PropertyListEncoder as a throwaway seed, decoded by v0.1.0's own PlayerProgressManager, and then mutated through the tag's public, clock-free API (addCoins, spendCoins, recordCorrectAnswer, recordWrongAnswer, updateBestScore, recordQuestionSeen, recordSessionStats, recordPowerUpUsed, recordMultiplayerResult, unlockAchievement, markPremiumBonusCoinsReceived). The committed bytes are the output of the tag's own save() after those operations. The seed is not committed.",
+      "identicalBytesWith" : [
+        "v0.1.1/player_progress_populated.plist",
+        "v0.1.2/player_progress_populated.plist",
+        "v0.1.3/player_progress_populated.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.0/player_progress_populated.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through public engine mutations",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "90cb9b034c73eab4e6c52ab2118e7f0612ce9d6b05824e526ef50c7d6e3b2a87",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.0"
+    },
+    {
+      "byteCount" : 62,
+      "commit" : "46c08c3513550fed6daa96c7c82e052c39877a90",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "decoded as a legacy document",
+      "expectedPreferences" : {
+        "hapticsEnabled" : false
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nv0.1.0's UserPreferencesLoader.write(preferences:) resolves the Documents directory internally and cannot take a URL before v0.1.3, so the generator redirects the whole home directory with CFFIXED_USER_HOME and lets the shipped code path write the file itself. v0.1.3 also offers write(preferences:to:), but all four tags deliberately use the shared no-URL overload so the fixtures compare like for like. hapticsEnabled: false is the only nondefault value this model can express — the loader returns true for a missing or undecodable document.",
+      "identicalBytesWith" : [
+        "v0.1.1/user_preferences.plist",
+        "v0.1.2/user_preferences.plist",
+        "v0.1.3/user_preferences.plist"
+      ],
+      "kind" : "userPreferences",
+      "path" : "v0.1.0/user_preferences.plist",
+      "producingCall" : "UserPreferencesLoader.write(preferences:)",
+      "producingType" : "QuizEngineCore.UserPreferencesLoader",
+      "sha256" : "497a64c19503fd9026af5171c92f84c12b03309cb33adbca8b375a207f35fa76",
+      "storagePath" : "Documents/user_preferences.plist",
+      "tag" : "v0.1.0"
+    },
+    {
+      "byteCount" : 965,
+      "commit" : "42db3aae3917262b41cf54f04b888e1083a50a3d",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 0,
+        "bestSingleSessionScore" : 0,
+        "bestSingleSessionStreak" : 0,
+        "categoryStats" : {
+
+        },
+        "coins" : 100,
+        "currentPlayStreak" : 0,
+        "currentStreak" : 0,
+        "dailyStats" : {
+
+        },
+        "hasReceivedPremiumBonusCoins" : false,
+        "hourlyPerformance" : {
+
+        },
+        "lifetimeAverageResponseTimeMs" : 0,
+        "lifetimeGamesPlayed" : 0,
+        "lifetimeQuestionsAnswered" : 0,
+        "lifetimeQuestionsCorrect" : 0,
+        "lifetimeResponseTimeSamples" : 0,
+        "longestMultiplayerWinStreak" : 0,
+        "longestPlayStreak" : 0,
+        "longestStreak" : 0,
+        "manuallyUnlockedCategories" : [
+
+        ],
+        "multiplayerGamesDraw" : 0,
+        "multiplayerGamesLost" : 0,
+        "multiplayerGamesPlayed" : 0,
+        "multiplayerGamesWon" : 0,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 0,
+        "multiplayerTotalQuestionsCorrect" : 0,
+        "multiplayerTotalResponseTimeMs" : 0,
+        "multiplayerWinStreak" : 0,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+
+        ],
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+
+        ],
+        "totalCoinsEarned" : 100,
+        "totalCoinsSpent" : 0,
+        "unlockedAchievements" : [
+
+        ],
+        "unlockedPacks" : [
+
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nA v0.1.1 PlayerProgressManager was created against an empty isolated directory, so it held PlayerProgress.default, and addCoins(0) triggered the tag's own first save without changing any field. These bytes are therefore exactly what a brand-new v0.1.1 install writes.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_default.plist",
+        "v0.1.2/player_progress_default.plist",
+        "v0.1.3/player_progress_default.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.1/player_progress_default.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through addCoins(0)",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "5e5db6460b70296a469d7dc99b709d60c3f398bf241684669904ea67018c3904",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.1"
+    },
+    {
+      "byteCount" : 2118,
+      "commit" : "42db3aae3917262b41cf54f04b888e1083a50a3d",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 780,
+        "bestSingleSessionScore" : 1300,
+        "bestSingleSessionStreak" : 21,
+        "categoryStats" : {
+          "geography" : {
+            "bestScore" : 1180,
+            "correctlyAnsweredIDs" : [
+              5,
+              9,
+              23
+            ],
+            "questionsAnswered" : 96,
+            "questionsCorrect" : 91,
+            "questionsCountAtHundredPercent" : 120
+          },
+          "history" : {
+            "bestScore" : 940,
+            "correctlyAnsweredIDs" : [
+              3,
+              17,
+              42,
+              88,
+              101
+            ],
+            "questionsAnswered" : 142,
+            "questionsCorrect" : 118
+          },
+          "science" : {
+            "bestScore" : 640,
+            "correctlyAnsweredIDs" : [
+              207
+            ],
+            "questionsAnswered" : 2,
+            "questionsCorrect" : 1
+          }
+        },
+        "coins" : 1315,
+        "currentPlayStreak" : 4,
+        "currentStreak" : 7,
+        "dailyStats" : {
+          "2025-03-12" : {
+            "correctByDifficulty" : {
+              "1" : 9,
+              "2" : 7,
+              "3" : 3
+            },
+            "gamesPlayed" : 2,
+            "questionsAnswered" : 24,
+            "questionsByDifficulty" : {
+              "1" : 10,
+              "2" : 9,
+              "3" : 5
+            },
+            "questionsCorrect" : 19,
+            "totalResponseTimeMs" : 138400
+          },
+          "2025-03-13" : {
+            "correctByDifficulty" : {
+              "1" : 12,
+              "2" : 11,
+              "3" : 4
+            },
+            "gamesPlayed" : 3,
+            "questionsAnswered" : 31,
+            "questionsByDifficulty" : {
+              "1" : 12,
+              "2" : 13,
+              "3" : 6
+            },
+            "questionsCorrect" : 27,
+            "totalResponseTimeMs" : 171950
+          },
+          "2025-03-14" : {
+            "correctByDifficulty" : {
+              "1" : 3,
+              "2" : 2,
+              "3" : 1
+            },
+            "gamesPlayed" : 1,
+            "questionsAnswered" : 8,
+            "questionsByDifficulty" : {
+              "1" : 3,
+              "2" : 3,
+              "3" : 2
+            },
+            "questionsCorrect" : 6,
+            "totalResponseTimeMs" : 41300
+          }
+        },
+        "hasReceivedPremiumBonusCoins" : true,
+        "hourlyPerformance" : {
+          "9" : {
+            "questionsAnswered" : 48,
+            "questionsCorrect" : 39,
+            "sessionCount" : 5
+          },
+          "18" : {
+            "questionsAnswered" : 133,
+            "questionsCorrect" : 104,
+            "sessionCount" : 12
+          },
+          "21" : {
+            "questionsAnswered" : 77,
+            "questionsCorrect" : 68,
+            "sessionCount" : 9
+          }
+        },
+        "lastAppOpenDate" : "2025-03-14T09:15:00Z",
+        "lastDailyRewardClaimedDate" : "2025-03-14T09:16:30Z",
+        "lastPlayedDate" : "2025-03-13T21:30:00Z",
+        "lastRewardAdWatchedDate" : "2025-03-13T18:45:00Z",
+        "lifetimeAverageResponseTimeMs" : 5742,
+        "lifetimeGamesPlayed" : 64,
+        "lifetimePowerUpsUsed" : 35,
+        "lifetimeQuestionsAnswered" : 824,
+        "lifetimeQuestionsCorrect" : 665,
+        "lifetimeResponseTimeSamples" : 812,
+        "longestMultiplayerWinStreak" : 6,
+        "longestPlayStreak" : 11,
+        "longestStreak" : 23,
+        "manuallyUnlockedCategories" : [
+          "culture"
+        ],
+        "multiplayerGamesDraw" : 2,
+        "multiplayerGamesLost" : 5,
+        "multiplayerGamesPlayed" : 19,
+        "multiplayerGamesWon" : 12,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 190,
+        "multiplayerTotalQuestionsCorrect" : 149,
+        "multiplayerTotalResponseTimeMs" : 107100,
+        "multiplayerWinStreak" : 4,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+          "fiftyFifty",
+          "skipQuestion",
+          "streakShield",
+          "timeFreeze"
+        ],
+        "premiumBonusClaimedFingerprint" : "legacy-unversioned",
+        "premiumBonusClaimedVersion" : "legacy-unversioned",
+        "previousAppOpenDate" : "2025-03-12T20:05:00Z",
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+          3,
+          5,
+          9,
+          17,
+          23,
+          42,
+          88,
+          101,
+          150,
+          207,
+          208,
+          301
+        ],
+        "totalCoinsEarned" : 4920,
+        "totalCoinsSpent" : 3605,
+        "unlockedAchievements" : [
+          "first_win",
+          "history_50",
+          "science_starter",
+          "streak_7"
+        ],
+        "unlockedPacks" : [
+          "history-expansion",
+          "starter-pack"
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nAn invented prior-session PlayerProgress was encoded with v0.1.1's own model and PropertyListEncoder as a throwaway seed, decoded by v0.1.1's own PlayerProgressManager, and then mutated through the tag's public, clock-free API (addCoins, spendCoins, recordCorrectAnswer, recordWrongAnswer, updateBestScore, recordQuestionSeen, recordSessionStats, recordPowerUpUsed, recordMultiplayerResult, unlockAchievement, markPremiumBonusCoinsReceived). The committed bytes are the output of the tag's own save() after those operations. The seed is not committed.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_populated.plist",
+        "v0.1.2/player_progress_populated.plist",
+        "v0.1.3/player_progress_populated.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.1/player_progress_populated.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through public engine mutations",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "90cb9b034c73eab4e6c52ab2118e7f0612ce9d6b05824e526ef50c7d6e3b2a87",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.1"
+    },
+    {
+      "byteCount" : 62,
+      "commit" : "42db3aae3917262b41cf54f04b888e1083a50a3d",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "decoded as a legacy document",
+      "expectedPreferences" : {
+        "hapticsEnabled" : false
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nv0.1.1's UserPreferencesLoader.write(preferences:) resolves the Documents directory internally and cannot take a URL before v0.1.3, so the generator redirects the whole home directory with CFFIXED_USER_HOME and lets the shipped code path write the file itself. v0.1.3 also offers write(preferences:to:), but all four tags deliberately use the shared no-URL overload so the fixtures compare like for like. hapticsEnabled: false is the only nondefault value this model can express — the loader returns true for a missing or undecodable document.",
+      "identicalBytesWith" : [
+        "v0.1.0/user_preferences.plist",
+        "v0.1.2/user_preferences.plist",
+        "v0.1.3/user_preferences.plist"
+      ],
+      "kind" : "userPreferences",
+      "path" : "v0.1.1/user_preferences.plist",
+      "producingCall" : "UserPreferencesLoader.write(preferences:)",
+      "producingType" : "QuizEngineCore.UserPreferencesLoader",
+      "sha256" : "497a64c19503fd9026af5171c92f84c12b03309cb33adbca8b375a207f35fa76",
+      "storagePath" : "Documents/user_preferences.plist",
+      "tag" : "v0.1.1"
+    },
+    {
+      "byteCount" : 965,
+      "commit" : "847c0461bb18ab36f212a75b04d6c8b0daf9144f",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 0,
+        "bestSingleSessionScore" : 0,
+        "bestSingleSessionStreak" : 0,
+        "categoryStats" : {
+
+        },
+        "coins" : 100,
+        "currentPlayStreak" : 0,
+        "currentStreak" : 0,
+        "dailyStats" : {
+
+        },
+        "hasReceivedPremiumBonusCoins" : false,
+        "hourlyPerformance" : {
+
+        },
+        "lifetimeAverageResponseTimeMs" : 0,
+        "lifetimeGamesPlayed" : 0,
+        "lifetimeQuestionsAnswered" : 0,
+        "lifetimeQuestionsCorrect" : 0,
+        "lifetimeResponseTimeSamples" : 0,
+        "longestMultiplayerWinStreak" : 0,
+        "longestPlayStreak" : 0,
+        "longestStreak" : 0,
+        "manuallyUnlockedCategories" : [
+
+        ],
+        "multiplayerGamesDraw" : 0,
+        "multiplayerGamesLost" : 0,
+        "multiplayerGamesPlayed" : 0,
+        "multiplayerGamesWon" : 0,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 0,
+        "multiplayerTotalQuestionsCorrect" : 0,
+        "multiplayerTotalResponseTimeMs" : 0,
+        "multiplayerWinStreak" : 0,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+
+        ],
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+
+        ],
+        "totalCoinsEarned" : 100,
+        "totalCoinsSpent" : 0,
+        "unlockedAchievements" : [
+
+        ],
+        "unlockedPacks" : [
+
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nA v0.1.2 PlayerProgressManager was created against an empty isolated directory, so it held PlayerProgress.default, and addCoins(0) triggered the tag's own first save without changing any field. These bytes are therefore exactly what a brand-new v0.1.2 install writes.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_default.plist",
+        "v0.1.1/player_progress_default.plist",
+        "v0.1.3/player_progress_default.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.2/player_progress_default.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through addCoins(0)",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "5e5db6460b70296a469d7dc99b709d60c3f398bf241684669904ea67018c3904",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.2"
+    },
+    {
+      "byteCount" : 2118,
+      "commit" : "847c0461bb18ab36f212a75b04d6c8b0daf9144f",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 780,
+        "bestSingleSessionScore" : 1300,
+        "bestSingleSessionStreak" : 21,
+        "categoryStats" : {
+          "geography" : {
+            "bestScore" : 1180,
+            "correctlyAnsweredIDs" : [
+              5,
+              9,
+              23
+            ],
+            "questionsAnswered" : 96,
+            "questionsCorrect" : 91,
+            "questionsCountAtHundredPercent" : 120
+          },
+          "history" : {
+            "bestScore" : 940,
+            "correctlyAnsweredIDs" : [
+              3,
+              17,
+              42,
+              88,
+              101
+            ],
+            "questionsAnswered" : 142,
+            "questionsCorrect" : 118
+          },
+          "science" : {
+            "bestScore" : 640,
+            "correctlyAnsweredIDs" : [
+              207
+            ],
+            "questionsAnswered" : 2,
+            "questionsCorrect" : 1
+          }
+        },
+        "coins" : 1315,
+        "currentPlayStreak" : 4,
+        "currentStreak" : 7,
+        "dailyStats" : {
+          "2025-03-12" : {
+            "correctByDifficulty" : {
+              "1" : 9,
+              "2" : 7,
+              "3" : 3
+            },
+            "gamesPlayed" : 2,
+            "questionsAnswered" : 24,
+            "questionsByDifficulty" : {
+              "1" : 10,
+              "2" : 9,
+              "3" : 5
+            },
+            "questionsCorrect" : 19,
+            "totalResponseTimeMs" : 138400
+          },
+          "2025-03-13" : {
+            "correctByDifficulty" : {
+              "1" : 12,
+              "2" : 11,
+              "3" : 4
+            },
+            "gamesPlayed" : 3,
+            "questionsAnswered" : 31,
+            "questionsByDifficulty" : {
+              "1" : 12,
+              "2" : 13,
+              "3" : 6
+            },
+            "questionsCorrect" : 27,
+            "totalResponseTimeMs" : 171950
+          },
+          "2025-03-14" : {
+            "correctByDifficulty" : {
+              "1" : 3,
+              "2" : 2,
+              "3" : 1
+            },
+            "gamesPlayed" : 1,
+            "questionsAnswered" : 8,
+            "questionsByDifficulty" : {
+              "1" : 3,
+              "2" : 3,
+              "3" : 2
+            },
+            "questionsCorrect" : 6,
+            "totalResponseTimeMs" : 41300
+          }
+        },
+        "hasReceivedPremiumBonusCoins" : true,
+        "hourlyPerformance" : {
+          "9" : {
+            "questionsAnswered" : 48,
+            "questionsCorrect" : 39,
+            "sessionCount" : 5
+          },
+          "18" : {
+            "questionsAnswered" : 133,
+            "questionsCorrect" : 104,
+            "sessionCount" : 12
+          },
+          "21" : {
+            "questionsAnswered" : 77,
+            "questionsCorrect" : 68,
+            "sessionCount" : 9
+          }
+        },
+        "lastAppOpenDate" : "2025-03-14T09:15:00Z",
+        "lastDailyRewardClaimedDate" : "2025-03-14T09:16:30Z",
+        "lastPlayedDate" : "2025-03-13T21:30:00Z",
+        "lastRewardAdWatchedDate" : "2025-03-13T18:45:00Z",
+        "lifetimeAverageResponseTimeMs" : 5742,
+        "lifetimeGamesPlayed" : 64,
+        "lifetimePowerUpsUsed" : 35,
+        "lifetimeQuestionsAnswered" : 824,
+        "lifetimeQuestionsCorrect" : 665,
+        "lifetimeResponseTimeSamples" : 812,
+        "longestMultiplayerWinStreak" : 6,
+        "longestPlayStreak" : 11,
+        "longestStreak" : 23,
+        "manuallyUnlockedCategories" : [
+          "culture"
+        ],
+        "multiplayerGamesDraw" : 2,
+        "multiplayerGamesLost" : 5,
+        "multiplayerGamesPlayed" : 19,
+        "multiplayerGamesWon" : 12,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 190,
+        "multiplayerTotalQuestionsCorrect" : 149,
+        "multiplayerTotalResponseTimeMs" : 107100,
+        "multiplayerWinStreak" : 4,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+          "fiftyFifty",
+          "skipQuestion",
+          "streakShield",
+          "timeFreeze"
+        ],
+        "premiumBonusClaimedFingerprint" : "legacy-unversioned",
+        "premiumBonusClaimedVersion" : "legacy-unversioned",
+        "previousAppOpenDate" : "2025-03-12T20:05:00Z",
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+          3,
+          5,
+          9,
+          17,
+          23,
+          42,
+          88,
+          101,
+          150,
+          207,
+          208,
+          301
+        ],
+        "totalCoinsEarned" : 4920,
+        "totalCoinsSpent" : 3605,
+        "unlockedAchievements" : [
+          "first_win",
+          "history_50",
+          "science_starter",
+          "streak_7"
+        ],
+        "unlockedPacks" : [
+          "history-expansion",
+          "starter-pack"
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nAn invented prior-session PlayerProgress was encoded with v0.1.2's own model and PropertyListEncoder as a throwaway seed, decoded by v0.1.2's own PlayerProgressManager, and then mutated through the tag's public, clock-free API (addCoins, spendCoins, recordCorrectAnswer, recordWrongAnswer, updateBestScore, recordQuestionSeen, recordSessionStats, recordPowerUpUsed, recordMultiplayerResult, unlockAchievement, markPremiumBonusCoinsReceived). The committed bytes are the output of the tag's own save() after those operations. The seed is not committed.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_populated.plist",
+        "v0.1.1/player_progress_populated.plist",
+        "v0.1.3/player_progress_populated.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.2/player_progress_populated.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through public engine mutations",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "90cb9b034c73eab4e6c52ab2118e7f0612ce9d6b05824e526ef50c7d6e3b2a87",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.2"
+    },
+    {
+      "byteCount" : 62,
+      "commit" : "847c0461bb18ab36f212a75b04d6c8b0daf9144f",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "decoded as a legacy document",
+      "expectedPreferences" : {
+        "hapticsEnabled" : false
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nv0.1.2's UserPreferencesLoader.write(preferences:) resolves the Documents directory internally and cannot take a URL before v0.1.3, so the generator redirects the whole home directory with CFFIXED_USER_HOME and lets the shipped code path write the file itself. v0.1.3 also offers write(preferences:to:), but all four tags deliberately use the shared no-URL overload so the fixtures compare like for like. hapticsEnabled: false is the only nondefault value this model can express — the loader returns true for a missing or undecodable document.",
+      "identicalBytesWith" : [
+        "v0.1.0/user_preferences.plist",
+        "v0.1.1/user_preferences.plist",
+        "v0.1.3/user_preferences.plist"
+      ],
+      "kind" : "userPreferences",
+      "path" : "v0.1.2/user_preferences.plist",
+      "producingCall" : "UserPreferencesLoader.write(preferences:)",
+      "producingType" : "QuizEngineCore.UserPreferencesLoader",
+      "sha256" : "497a64c19503fd9026af5171c92f84c12b03309cb33adbca8b375a207f35fa76",
+      "storagePath" : "Documents/user_preferences.plist",
+      "tag" : "v0.1.2"
+    },
+    {
+      "byteCount" : 965,
+      "commit" : "770be372adbc0527f519a033f19d72017f407c30",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 0,
+        "bestSingleSessionScore" : 0,
+        "bestSingleSessionStreak" : 0,
+        "categoryStats" : {
+
+        },
+        "coins" : 100,
+        "currentPlayStreak" : 0,
+        "currentStreak" : 0,
+        "dailyStats" : {
+
+        },
+        "hasReceivedPremiumBonusCoins" : false,
+        "hourlyPerformance" : {
+
+        },
+        "lifetimeAverageResponseTimeMs" : 0,
+        "lifetimeGamesPlayed" : 0,
+        "lifetimeQuestionsAnswered" : 0,
+        "lifetimeQuestionsCorrect" : 0,
+        "lifetimeResponseTimeSamples" : 0,
+        "longestMultiplayerWinStreak" : 0,
+        "longestPlayStreak" : 0,
+        "longestStreak" : 0,
+        "manuallyUnlockedCategories" : [
+
+        ],
+        "multiplayerGamesDraw" : 0,
+        "multiplayerGamesLost" : 0,
+        "multiplayerGamesPlayed" : 0,
+        "multiplayerGamesWon" : 0,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 0,
+        "multiplayerTotalQuestionsCorrect" : 0,
+        "multiplayerTotalResponseTimeMs" : 0,
+        "multiplayerWinStreak" : 0,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+
+        ],
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+
+        ],
+        "totalCoinsEarned" : 100,
+        "totalCoinsSpent" : 0,
+        "unlockedAchievements" : [
+
+        ],
+        "unlockedPacks" : [
+
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nA v0.1.3 PlayerProgressManager was created against an empty isolated directory, so it held PlayerProgress.default, and addCoins(0) triggered the tag's own first save without changing any field. These bytes are therefore exactly what a brand-new v0.1.3 install writes.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_default.plist",
+        "v0.1.1/player_progress_default.plist",
+        "v0.1.2/player_progress_default.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.3/player_progress_default.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through addCoins(0)",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "5e5db6460b70296a469d7dc99b709d60c3f398bf241684669904ea67018c3904",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.3"
+    },
+    {
+      "byteCount" : 2118,
+      "commit" : "770be372adbc0527f519a033f19d72017f407c30",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "loadedLegacy",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 780,
+        "bestSingleSessionScore" : 1300,
+        "bestSingleSessionStreak" : 21,
+        "categoryStats" : {
+          "geography" : {
+            "bestScore" : 1180,
+            "correctlyAnsweredIDs" : [
+              5,
+              9,
+              23
+            ],
+            "questionsAnswered" : 96,
+            "questionsCorrect" : 91,
+            "questionsCountAtHundredPercent" : 120
+          },
+          "history" : {
+            "bestScore" : 940,
+            "correctlyAnsweredIDs" : [
+              3,
+              17,
+              42,
+              88,
+              101
+            ],
+            "questionsAnswered" : 142,
+            "questionsCorrect" : 118
+          },
+          "science" : {
+            "bestScore" : 640,
+            "correctlyAnsweredIDs" : [
+              207
+            ],
+            "questionsAnswered" : 2,
+            "questionsCorrect" : 1
+          }
+        },
+        "coins" : 1315,
+        "currentPlayStreak" : 4,
+        "currentStreak" : 7,
+        "dailyStats" : {
+          "2025-03-12" : {
+            "correctByDifficulty" : {
+              "1" : 9,
+              "2" : 7,
+              "3" : 3
+            },
+            "gamesPlayed" : 2,
+            "questionsAnswered" : 24,
+            "questionsByDifficulty" : {
+              "1" : 10,
+              "2" : 9,
+              "3" : 5
+            },
+            "questionsCorrect" : 19,
+            "totalResponseTimeMs" : 138400
+          },
+          "2025-03-13" : {
+            "correctByDifficulty" : {
+              "1" : 12,
+              "2" : 11,
+              "3" : 4
+            },
+            "gamesPlayed" : 3,
+            "questionsAnswered" : 31,
+            "questionsByDifficulty" : {
+              "1" : 12,
+              "2" : 13,
+              "3" : 6
+            },
+            "questionsCorrect" : 27,
+            "totalResponseTimeMs" : 171950
+          },
+          "2025-03-14" : {
+            "correctByDifficulty" : {
+              "1" : 3,
+              "2" : 2,
+              "3" : 1
+            },
+            "gamesPlayed" : 1,
+            "questionsAnswered" : 8,
+            "questionsByDifficulty" : {
+              "1" : 3,
+              "2" : 3,
+              "3" : 2
+            },
+            "questionsCorrect" : 6,
+            "totalResponseTimeMs" : 41300
+          }
+        },
+        "hasReceivedPremiumBonusCoins" : true,
+        "hourlyPerformance" : {
+          "9" : {
+            "questionsAnswered" : 48,
+            "questionsCorrect" : 39,
+            "sessionCount" : 5
+          },
+          "18" : {
+            "questionsAnswered" : 133,
+            "questionsCorrect" : 104,
+            "sessionCount" : 12
+          },
+          "21" : {
+            "questionsAnswered" : 77,
+            "questionsCorrect" : 68,
+            "sessionCount" : 9
+          }
+        },
+        "lastAppOpenDate" : "2025-03-14T09:15:00Z",
+        "lastDailyRewardClaimedDate" : "2025-03-14T09:16:30Z",
+        "lastPlayedDate" : "2025-03-13T21:30:00Z",
+        "lastRewardAdWatchedDate" : "2025-03-13T18:45:00Z",
+        "lifetimeAverageResponseTimeMs" : 5742,
+        "lifetimeGamesPlayed" : 64,
+        "lifetimePowerUpsUsed" : 35,
+        "lifetimeQuestionsAnswered" : 824,
+        "lifetimeQuestionsCorrect" : 665,
+        "lifetimeResponseTimeSamples" : 812,
+        "longestMultiplayerWinStreak" : 6,
+        "longestPlayStreak" : 11,
+        "longestStreak" : 23,
+        "manuallyUnlockedCategories" : [
+          "culture"
+        ],
+        "multiplayerGamesDraw" : 2,
+        "multiplayerGamesLost" : 5,
+        "multiplayerGamesPlayed" : 19,
+        "multiplayerGamesWon" : 12,
+        "multiplayerMatchReceipts" : [
+
+        ],
+        "multiplayerTotalQuestionsAnswered" : 190,
+        "multiplayerTotalQuestionsCorrect" : 149,
+        "multiplayerTotalResponseTimeMs" : 107100,
+        "multiplayerWinStreak" : 4,
+        "powerUpCredits" : {
+
+        },
+        "powerUpTypesUsed" : [
+          "fiftyFifty",
+          "skipQuestion",
+          "streakShield",
+          "timeFreeze"
+        ],
+        "premiumBonusClaimedFingerprint" : "legacy-unversioned",
+        "premiumBonusClaimedVersion" : "legacy-unversioned",
+        "previousAppOpenDate" : "2025-03-12T20:05:00Z",
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+          3,
+          5,
+          9,
+          17,
+          23,
+          42,
+          88,
+          101,
+          150,
+          207,
+          208,
+          301
+        ],
+        "totalCoinsEarned" : 4920,
+        "totalCoinsSpent" : 3605,
+        "unlockedAchievements" : [
+          "first_win",
+          "history_50",
+          "science_starter",
+          "streak_7"
+        ],
+        "unlockedPacks" : [
+          "history-expansion",
+          "starter-pack"
+        ]
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nAn invented prior-session PlayerProgress was encoded with v0.1.3's own model and PropertyListEncoder as a throwaway seed, decoded by v0.1.3's own PlayerProgressManager, and then mutated through the tag's public, clock-free API (addCoins, spendCoins, recordCorrectAnswer, recordWrongAnswer, updateBestScore, recordQuestionSeen, recordSessionStats, recordPowerUpUsed, recordMultiplayerResult, unlockAchievement, markPremiumBonusCoinsReceived). The committed bytes are the output of the tag's own save() after those operations. The seed is not committed.",
+      "identicalBytesWith" : [
+        "v0.1.0/player_progress_populated.plist",
+        "v0.1.1/player_progress_populated.plist",
+        "v0.1.2/player_progress_populated.plist"
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.1.3/player_progress_populated.plist",
+      "producingCall" : "PlayerProgressManager.save(), reached through public engine mutations",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "90cb9b034c73eab4e6c52ab2118e7f0612ce9d6b05824e526ef50c7d6e3b2a87",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.1.3"
+    },
+    {
+      "byteCount" : 62,
+      "commit" : "770be372adbc0527f519a033f19d72017f407c30",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "none — a bare PropertyListEncoder document with no schemaVersion key",
+      "expectedLoadStatus" : "decoded as a legacy document",
+      "expectedPreferences" : {
+        "hapticsEnabled" : false
+      },
+      "expectedSchemaVersion" : 0,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks the exact tag out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/legacy-v0_1_x.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh <tag>\n\nv0.1.3's UserPreferencesLoader.write(preferences:) resolves the Documents directory internally and cannot take a URL before v0.1.3, so the generator redirects the whole home directory with CFFIXED_USER_HOME and lets the shipped code path write the file itself. v0.1.3 also offers write(preferences:to:), but all four tags deliberately use the shared no-URL overload so the fixtures compare like for like. hapticsEnabled: false is the only nondefault value this model can express — the loader returns true for a missing or undecodable document.",
+      "identicalBytesWith" : [
+        "v0.1.0/user_preferences.plist",
+        "v0.1.1/user_preferences.plist",
+        "v0.1.2/user_preferences.plist"
+      ],
+      "kind" : "userPreferences",
+      "path" : "v0.1.3/user_preferences.plist",
+      "producingCall" : "UserPreferencesLoader.write(preferences:)",
+      "producingType" : "QuizEngineCore.UserPreferencesLoader",
+      "sha256" : "497a64c19503fd9026af5171c92f84c12b03309cb33adbca8b375a207f35fa76",
+      "storagePath" : "Documents/user_preferences.plist",
+      "tag" : "v0.1.3"
+    },
+    {
+      "byteCount" : 2380,
+      "commit" : "9c5b2282d001a6a7ad714c54ffa6d726eca9fd5e",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "schema-1 PersistenceEnvelope with schemaVersion and payload keys",
+      "expectedLoadStatus" : "loaded(schemaVersion: 1)",
+      "expectedProgress" : {
+        "bestMultiplayerScore" : 910,
+        "bestSingleSessionScore" : 1840,
+        "bestSingleSessionStreak" : 28,
+        "categoryStats" : {
+          "geography" : {
+            "bestScore" : 1720,
+            "correctlyAnsweredIDs" : [
+              5,
+              9,
+              23,
+              61
+            ],
+            "questionsAnswered" : 190,
+            "questionsCorrect" : 176,
+            "questionsCountAtHundredPercent" : 120
+          },
+          "history" : {
+            "bestScore" : 1460,
+            "correctlyAnsweredIDs" : [
+              3,
+              17,
+              42,
+              88,
+              101,
+              133
+            ],
+            "questionsAnswered" : 268,
+            "questionsCorrect" : 221
+          },
+          "science" : {
+            "bestScore" : 880,
+            "correctlyAnsweredIDs" : [
+              402
+            ],
+            "questionsAnswered" : 2,
+            "questionsCorrect" : 1
+          }
+        },
+        "coins" : 2050,
+        "currentPlayStreak" : 9,
+        "currentStreak" : 12,
+        "dailyStats" : {
+          "2025-11-02" : {
+            "correctByDifficulty" : {
+              "1" : 13,
+              "2" : 11,
+              "3" : 4
+            },
+            "gamesPlayed" : 3,
+            "questionsAnswered" : 33,
+            "questionsByDifficulty" : {
+              "1" : 13,
+              "2" : 14,
+              "3" : 6
+            },
+            "questionsCorrect" : 28,
+            "totalResponseTimeMs" : 182600
+          },
+          "2025-11-03" : {
+            "correctByDifficulty" : {
+              "1" : 10,
+              "2" : 8,
+              "3" : 3
+            },
+            "gamesPlayed" : 2,
+            "questionsAnswered" : 27,
+            "questionsByDifficulty" : {
+              "1" : 11,
+              "2" : 10,
+              "3" : 6
+            },
+            "questionsCorrect" : 21,
+            "totalResponseTimeMs" : 149850
+          },
+          "2025-11-04" : {
+            "correctByDifficulty" : {
+              "1" : 6,
+              "2" : 4,
+              "3" : 2
+            },
+            "gamesPlayed" : 1,
+            "questionsAnswered" : 14,
+            "questionsByDifficulty" : {
+              "1" : 6,
+              "2" : 5,
+              "3" : 3
+            },
+            "questionsCorrect" : 12,
+            "totalResponseTimeMs" : 70450
+          }
+        },
+        "hasReceivedPremiumBonusCoins" : true,
+        "hourlyPerformance" : {
+          "8" : {
+            "questionsAnswered" : 96,
+            "questionsCorrect" : 81,
+            "sessionCount" : 11
+          },
+          "19" : {
+            "questionsAnswered" : 214,
+            "questionsCorrect" : 172,
+            "sessionCount" : 21
+          },
+          "22" : {
+            "questionsAnswered" : 118,
+            "questionsCorrect" : 97,
+            "sessionCount" : 14
+          }
+        },
+        "lastAppOpenDate" : "2025-11-04T08:40:00Z",
+        "lastDailyRewardClaimedDate" : "2025-11-04T08:41:10Z",
+        "lastPlayedDate" : "2025-11-03T22:05:00Z",
+        "lastRewardAdWatchedDate" : "2025-11-03T19:20:00Z",
+        "lifetimeAverageResponseTimeMs" : 5318,
+        "lifetimeGamesPlayed" : 148,
+        "lifetimePowerUpsUsed" : 83,
+        "lifetimeQuestionsAnswered" : 1918,
+        "lifetimeQuestionsCorrect" : 1579,
+        "lifetimeResponseTimeSamples" : 1903,
+        "longestMultiplayerWinStreak" : 9,
+        "longestPlayStreak" : 17,
+        "longestStreak" : 31,
+        "manuallyUnlockedCategories" : [
+          "culture",
+          "science"
+        ],
+        "multiplayerGamesDraw" : 5,
+        "multiplayerGamesLost" : 13,
+        "multiplayerGamesPlayed" : 42,
+        "multiplayerGamesWon" : 24,
+        "multiplayerMatchReceipts" : [
+          {
+            "fingerprint" : "fp-0001-host-win-780",
+            "matchID" : "fixture-match-0001"
+          },
+          {
+            "fingerprint" : "fp-0002-guest-draw-640",
+            "matchID" : "fixture-match-0002"
+          }
+        ],
+        "multiplayerTotalQuestionsAnswered" : 420,
+        "multiplayerTotalQuestionsCorrect" : 329,
+        "multiplayerTotalResponseTimeMs" : 242350,
+        "multiplayerWinStreak" : 0,
+        "powerUpCredits" : {
+          "fiftyFifty" : 2,
+          "skipQuestion" : 2,
+          "timeFreeze" : 4
+        },
+        "powerUpTypesUsed" : [
+          "fiftyFifty",
+          "skipQuestion",
+          "streakShield",
+          "timeFreeze"
+        ],
+        "premiumBonusClaimedFingerprint" : "legacy-unversioned",
+        "premiumBonusClaimedVersion" : "legacy-unversioned",
+        "previousAppOpenDate" : "2025-11-03T18:55:00Z",
+        "rewardReceipts" : [
+
+        ],
+        "seenQuestionIDs" : [
+          3,
+          5,
+          9,
+          17,
+          23,
+          42,
+          61,
+          88,
+          101,
+          133,
+          150,
+          402,
+          403,
+          511
+        ],
+        "totalCoinsEarned" : 9755,
+        "totalCoinsSpent" : 7705,
+        "unlockedAchievements" : [
+          "first_win",
+          "history_50",
+          "science_starter",
+          "streak_30"
+        ],
+        "unlockedPacks" : [
+          "history-expansion",
+          "starter-pack"
+        ]
+      },
+      "expectedSchemaVersion" : 1,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks v0.2.0 out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/schema1-v0_2_0.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh v0.2.0\n\nAn invented prior state was written through the public transactional import (PlayerProgressImportRequest / importProgress), then mutated through v0.2.0's public API (addCoins, spendCoins, grantPowerUpCredits, consumePowerUp, recordCorrectAnswer, recordWrongAnswer, updateBestScore, recordQuestionSeen, recordSessionStats, recordMultiplayerResult(matchID:fingerprint:...), unlockAchievement, markPremiumBonusCoinsReceived) with an injected fixed clock and an explicit UTC Gregorian calendar. The committed bytes are the primary document left by v0.2.0's own writeAndVerify; the import marker and the backup sibling are not committed.",
+      "identicalBytesWith" : [
+
+      ],
+      "kind" : "playerProgress",
+      "path" : "v0.2.0/player_progress_schema_1.plist",
+      "producingCall" : "PlayerProgressManager.importProgress(_:) then save()",
+      "producingType" : "QuizEngineCore.PlayerProgressManager",
+      "sha256" : "9dd605326d14c684ac97dacc3906a21195bab2a8f5be8e6210be554f4d3510e6",
+      "storagePath" : "Documents/player_progress.plist",
+      "tag" : "v0.2.0"
+    },
+    {
+      "byteCount" : 95,
+      "commit" : "9c5b2282d001a6a7ad714c54ffa6d726eca9fd5e",
+      "containsNoRealUserDataOrSecret" : true,
+      "envelope" : "schema-1 PersistenceEnvelope with schemaVersion and payload keys",
+      "expectedLoadStatus" : "decoded as schema 1",
+      "expectedPreferences" : {
+        "hapticsEnabled" : false
+      },
+      "expectedSchemaVersion" : 1,
+      "howObtained" : "Produced by Scripts/generate-persistence-fixtures.sh, which checks v0.2.0 out into a detached git worktree, copies Scripts/PersistenceFixtureGenerators/schema1-v0_2_0.swift into it as an executable target, and runs it with CFFIXED_USER_HOME pointed at a throwaway home directory and SWIFT_DETERMINISTIC_HASHING=1. Reproduce with: sh Scripts/generate-persistence-fixtures.sh v0.2.0\n\nWritten through v0.2.0's public throwing injected-store overload so a write failure could not be swallowed. This is the same envelope the non-throwing URL overload produces.",
+      "identicalBytesWith" : [
+
+      ],
+      "kind" : "userPreferences",
+      "path" : "v0.2.0/user_preferences_schema_1.plist",
+      "producingCall" : "UserPreferencesLoader.write(preferences:to:) with an injected FileQuizEnginePersistenceStore",
+      "producingType" : "QuizEngineCore.UserPreferencesLoader",
+      "sha256" : "5b46291281003be144db3587c4d9877a88d34f85a0eb4ab199d1c24287c86b34",
+      "storagePath" : "Documents/user_preferences.plist",
+      "tag" : "v0.2.0"
+    }
+  ],
+  "generator" : "Scripts/generate-persistence-fixtures.sh",
+  "manifestBuilder" : "Scripts/PersistenceFixtureGenerators/build-manifest.swift",
+  "manifestVersion" : 1,
+  "notes" : [
+    "Every fixture was emitted by building and running its own release tag's source in a detached git worktree. Nothing here was synthesized with current models, PropertyListSerialization dictionaries, or hand-written property lists.",
+    "Do not edit a fixture or this manifest by hand. Change the generator, rerun the regenerate command, and commit the new bytes and hashes together.",
+    "expectedProgress and expectedPreferences record what the originating tag's own decoder read back out of the file it had just written. The migration tests assert those values through the current public load path.",
+    "powerUpCredits and multiplayerMatchReceipts do not exist in the v0.1.x model. The values recorded for v0.1.x fixtures are the defaults the current package must apply on load.",
+    "rewardReceipts and the Premium claimed version/fingerprint do not exist in any released fixture model. Reward receipts default to empty; a released true hasReceivedPremiumBonusCoins flag maps to the permanent legacy-unversioned claim identity so migration cannot re-award it.",
+    "identicalBytesWith is measured from the committed bytes. Releases with identical documents keep separate fixtures anyway, so a future divergence is caught per release.",
+    "Fixture content is invented test data. No fixture contains a real player, device, account, credential, or other secret."
+  ],
+  "regenerateCommand" : "sh Scripts/generate-persistence-fixtures.sh"
+}

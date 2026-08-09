@@ -863,11 +863,85 @@ public class PlayerProgressManager: ObservableObject {
         variant.rules.powerUps.rule(for: powerUp)?.coinCost ?? powerUp.cost
     }
 
-    /// Marks that the 500 premium bonus coins have been received.
-    /// Call after awarding to prevent duplicate grants.
+    /// Compatibility marker for consumers that awarded Premium coins separately.
+    ///
+    /// This does not award coins. New code must use `claimPremiumBonus(_:)` so the
+    /// entitlement, balance, total earned, claim identity, and receipt share one save.
+    @available(*, deprecated, message: "Use claimPremiumBonus(_:) for an atomic Premium award.")
     public func markPremiumBonusCoinsReceived() {
+        guard !progress.hasReceivedPremiumBonusCoins else { return }
+        let snapshot = progress
         progress.hasReceivedPremiumBonusCoins = true
-        save()
+        progress.premiumBonusClaimedVersion = PlayerProgress.legacyPremiumBonusClaimIdentity
+        progress.premiumBonusClaimedFingerprint = PlayerProgress.legacyPremiumBonusClaimIdentity
+        guard save() else {
+            progress = snapshot
+            return
+        }
+    }
+
+    /// Atomically applies the app-owned Premium bonus after entitlement resolution.
+    @discardableResult
+    public func claimPremiumBonus(
+        _ request: PremiumBonusClaimRequest
+    ) -> RewardTransactionOutcome {
+        guard validRewardText(request.receiptID),
+              validRewardText(request.rewardVersion),
+              request.coinAmount > 0 else {
+            return .rejected
+        }
+
+        let fingerprint = Self.rewardFingerprint(
+            kind: .premiumBonusCoins,
+            amount: request.coinAmount,
+            version: request.rewardVersion
+        )
+        if let existing = rewardReceiptOutcome(
+            receiptID: request.receiptID,
+            fingerprint: fingerprint
+        ) {
+            return existing
+        }
+
+        if let claimedFingerprint = progress.premiumBonusClaimedFingerprint,
+           let claimedVersion = progress.premiumBonusClaimedVersion {
+            if claimedVersion == PlayerProgress.legacyPremiumBonusClaimIdentity,
+               claimedFingerprint == PlayerProgress.legacyPremiumBonusClaimIdentity {
+                return .ineligible
+            }
+            return claimedFingerprint == fingerprint && claimedVersion == request.rewardVersion
+                ? .alreadyRecorded
+                : .conflictingReceipt
+        }
+        guard !progress.hasReceivedPremiumBonusCoins else { return .ineligible }
+        guard request.isEntitled else { return .ineligible }
+
+        let snapshot = progress
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(request.coinAmount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(request.coinAmount)
+        guard !coinsOverflow, !totalOverflow else { return .rejected }
+
+        progress.coins = coins
+        progress.totalCoinsEarned = total
+        progress.hasReceivedPremiumBonusCoins = true
+        progress.premiumBonusClaimedVersion = request.rewardVersion
+        progress.premiumBonusClaimedFingerprint = fingerprint
+        appendRewardReceipt(
+            RewardReceipt(
+                receiptID: request.receiptID,
+                kind: .premiumBonusCoins,
+                fingerprint: fingerprint,
+                recordedAt: clock.now
+            )
+        )
+
+        guard save() else {
+            progress = snapshot
+            return rewardPersistenceFailure(
+                reason: "The Premium bonus transaction was not persisted."
+            )
+        }
+        return .recorded
     }
 
     // MARK: - Streak Operations
@@ -1462,13 +1536,79 @@ public class PlayerProgressManager: ObservableObject {
         return secondsSince >= variant.rules.economy.rewardAd.cooldownSeconds
     }
 
-    public func recordRewardAdWatched() {
-        recordRewardAdWatched(coinsAwarded: variant.rules.economy.rewardAd.coinReward)
+    /// Atomically records a provider-earned rewarded-ad callback.
+    @discardableResult
+    public func recordRewardedAdReward(
+        _ request: RewardedAdRewardRequest
+    ) -> RewardTransactionOutcome {
+        guard validRewardText(request.receiptID),
+              validRewardText(request.rewardVersion),
+              request.coinAmount > 0 else {
+            return .rejected
+        }
+
+        let fingerprint = Self.rewardFingerprint(
+            kind: .rewardedAdCoins,
+            amount: request.coinAmount,
+            version: request.rewardVersion
+        )
+        if let existing = rewardReceiptOutcome(
+            receiptID: request.receiptID,
+            fingerprint: fingerprint
+        ) {
+            return existing
+        }
+
+        let configuredAmount = variant.rules.economy.rewardAd.coinReward
+        guard request.coinAmount == configuredAmount else { return .rejected }
+        guard canWatchRewardAd() else { return .ineligible }
+
+        let snapshot = progress
+        let now = clock.now
+        let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(configuredAmount)
+        let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(configuredAmount)
+        guard !coinsOverflow, !totalOverflow else { return .rejected }
+
+        progress.coins = coins
+        progress.totalCoinsEarned = total
+        progress.lastRewardAdWatchedDate = now
+        appendRewardReceipt(
+            RewardReceipt(
+                receiptID: request.receiptID,
+                kind: .rewardedAdCoins,
+                fingerprint: fingerprint,
+                recordedAt: now
+            )
+        )
+
+        guard save() else {
+            progress = snapshot
+            return rewardPersistenceFailure(
+                reason: "The rewarded-ad transaction was not persisted."
+            )
+        }
+        return .recorded
     }
 
-    /// Records that the user watched a rewarded ad and awards an explicit compatibility amount.
-    public func recordRewardAdWatched(coinsAwarded: Int = 25) {
-        guard coinsAwarded >= 0 else { return }
+    @available(*, deprecated, message: "Use recordRewardedAdReward(_:) with a stable receipt ID.")
+    public func recordRewardAdWatched() {
+        recordCompatibilityRewardAd(
+            coinsAwarded: variant.rules.economy.rewardAd.coinReward
+        )
+    }
+
+    /// Compatibility transaction without durable callback identity.
+    ///
+    /// It remains cooldown-gated and rollback-safe, but cannot provide durable
+    /// callback idempotency. Shipping consumers must use the receipt-backed API.
+    @available(*, deprecated, message: "Use recordRewardedAdReward(_:) with a stable receipt ID.")
+    public func recordRewardAdWatched(coinsAwarded: Int) {
+        recordCompatibilityRewardAd(coinsAwarded: coinsAwarded)
+    }
+
+    private func recordCompatibilityRewardAd(coinsAwarded: Int) {
+        guard coinsAwarded >= 0, canWatchRewardAd() else { return }
+        let snapshot = progress
         let now = clock.now
         let (coins, coinsOverflow) = progress.coins.addingReportingOverflow(coinsAwarded)
         let (total, totalOverflow) = progress.totalCoinsEarned.addingReportingOverflow(coinsAwarded)
@@ -1476,7 +1616,50 @@ public class PlayerProgressManager: ObservableObject {
         progress.lastRewardAdWatchedDate = now
         progress.coins = coins
         progress.totalCoinsEarned = total
-        save()
+        guard save() else {
+            progress = snapshot
+            return
+        }
+    }
+
+    private func validRewardText(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func rewardFingerprint(
+        kind: RewardReceiptKind,
+        amount: Int,
+        version: String
+    ) -> String {
+        let kindValue = kind.rawValue
+        return "kind:\(kindValue.utf8.count):\(kindValue)|amount:\(amount)|version:\(version.utf8.count):\(version)"
+    }
+
+    private func rewardReceiptOutcome(
+        receiptID: String,
+        fingerprint: String
+    ) -> RewardTransactionOutcome? {
+        guard let receipt = progress.rewardReceipts.first(where: { $0.receiptID == receiptID }) else {
+            return nil
+        }
+        return receipt.fingerprint == fingerprint ? .alreadyRecorded : .conflictingReceipt
+    }
+
+    private func appendRewardReceipt(_ receipt: RewardReceipt) {
+        progress.rewardReceipts.append(receipt)
+        let overflow = progress.rewardReceipts.count - PlayerProgress.maximumRewardReceiptCount
+        if overflow > 0 {
+            progress.rewardReceipts.removeFirst(overflow)
+        }
+    }
+
+    private func rewardPersistenceFailure(reason: String) -> RewardTransactionOutcome {
+        .persistenceFailed(
+            lastPersistenceError ?? .writeFailed(
+                path: persistenceStore.primaryURL.path,
+                reason: reason
+            )
+        )
     }
 
     /// Returns the time remaining until the next reward ad is available

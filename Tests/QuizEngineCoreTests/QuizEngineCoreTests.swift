@@ -214,6 +214,83 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    func testContentValidationRejectsDuplicateCategories() {
+        let result = QuizContentValidator.validate(
+            QuestionData(questions: [
+                validQuestion(id: 1, categories: ["space", "space"])
+            ]),
+            categories: contentCategories
+        )
+
+        XCTAssertEqual(
+            result.issues,
+            [.duplicateCategory(questionIndex: 0, categoryID: "space")]
+        )
+    }
+
+    func testQuestionStructureRulesDefineTheSingleSharedStructuralContract() {
+        // These constants are the ones both the local validator and the multiplayer wire
+        // validator resolve against; a second definition anywhere is the defect this guards.
+        XCTAssertEqual(QuizQuestionStructureRules.requiredAnswerCount, 4)
+        XCTAssertEqual(QuizQuestionStructureRules.requiredCorrectAnswerCount, 1)
+        XCTAssertEqual(QuizQuestionStructureRules.difficultyRange, 1...3)
+
+        XCTAssertTrue(QuizQuestionStructureRules.isBlank(""))
+        XCTAssertTrue(QuizQuestionStructureRules.isBlank("  \n\t"))
+        XCTAssertFalse(QuizQuestionStructureRules.isBlank("a"))
+
+        XCTAssertEqual(
+            QuizQuestionStructureRules.normalizedAnswerText("  New\t York "),
+            QuizQuestionStructureRules.normalizedAnswerText("new york")
+        )
+        XCTAssertNotEqual(
+            QuizQuestionStructureRules.normalizedAnswerText("New York"),
+            QuizQuestionStructureRules.normalizedAnswerText("New Yorks")
+        )
+
+        for difficulty in [Int.min, 0, 4, Int.max] {
+            XCTAssertFalse(QuizQuestionStructureRules.isValidDifficulty(difficulty), "\(difficulty)")
+        }
+        for difficulty in 1...3 {
+            XCTAssertTrue(QuizQuestionStructureRules.isValidDifficulty(difficulty), "\(difficulty)")
+        }
+        for count in [0, 1, 2, 3, 5, 16] {
+            XCTAssertFalse(QuizQuestionStructureRules.isValidAnswerCount(count), "\(count)")
+        }
+        XCTAssertTrue(QuizQuestionStructureRules.isValidAnswerCount(4))
+    }
+
+    func testQuestionStructureRulesReportEveryIssueInDeterministicOrder() {
+        let issues = QuizQuestionStructureRules.issues(
+            in: Question(
+                id: -1,
+                question: "Question",
+                answers: [
+                    Answer(text: "Same", correct: true),
+                    Answer(text: " same ", correct: false),
+                    Answer(text: "  ", correct: false)
+                ],
+                categories: ["space", "space", "  ", "unknown"],
+                difficulty: 7
+            ),
+            allowedCategoryIDs: ["space", "nature"]
+        )
+
+        XCTAssertEqual(
+            issues,
+            [
+                .nonPositiveID(id: -1),
+                .duplicateCategory(categoryIndex: 1, categoryID: "space"),
+                .blankCategory(categoryIndex: 2, categoryID: "  "),
+                .unknownCategory(categoryIndex: 3, categoryID: "unknown"),
+                .invalidAnswerCount(count: 3),
+                .duplicateAnswerText(answerIndex: 1, text: " same "),
+                .blankAnswerText(answerIndex: 2, text: "  "),
+                .invalidDifficulty(difficulty: 7)
+            ]
+        )
+    }
+
     func testContentValidationAcceptsValidContentAtDifficultyBounds() {
         let result = QuizContentValidator.validate(
             QuestionData(questions: [
@@ -585,7 +662,16 @@ final class QuizEngineCoreTests: XCTestCase {
         )
         XCTAssertEqual(try questionService.getQuestionsForMultiplayerMatch().count, 2)
 
-        manager.recordRewardAdWatched()
+        XCTAssertEqual(
+            manager.recordRewardedAdReward(
+                RewardedAdRewardRequest(
+                    receiptID: "custom-rules-ad-1",
+                    rewardVersion: "rewarded-ad-v1",
+                    coinAmount: 9
+                )
+            ),
+            .recorded
+        )
         XCTAssertEqual(manager.coins, 248)
         XCTAssertFalse(manager.canWatchRewardAd())
         XCTAssertEqual(manager.timeUntilNextRewardAd(), 30)
@@ -908,15 +994,18 @@ final class QuizEngineCoreTests: XCTestCase {
         var payload = try XCTUnwrap(document["payload"] as? [String: Any])
         payload.removeValue(forKey: "powerUpCredits")
         document["payload"] = payload
-        let legacySchemaOneData = try PropertyListSerialization.data(
+        let versionedData = try PropertyListSerialization.data(
             fromPropertyList: document,
             format: .binary,
             options: 0
         )
 
-        let manager = try makeManager(store: FakePersistenceStore(primaryData: legacySchemaOneData))
+        let manager = try makeManager(store: FakePersistenceStore(primaryData: versionedData))
 
-        XCTAssertEqual(manager.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertEqual(
+            manager.persistenceStatus,
+            .loaded(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
         XCTAssertTrue(manager.progress.powerUpCredits.isEmpty)
     }
 
@@ -1007,7 +1096,16 @@ final class QuizEngineCoreTests: XCTestCase {
         manager.handleAppOpen()
         manager.updatePlayStreak()
         XCTAssertNotNil(manager.claimDailyReward())
-        manager.recordRewardAdWatched()
+        XCTAssertEqual(
+            manager.recordRewardedAdReward(
+                RewardedAdRewardRequest(
+                    receiptID: "clock-rollback-ad-1",
+                    rewardVersion: "rewarded-ad-v1",
+                    coinAmount: variant.rules.economy.rewardAd.coinReward
+                )
+            ),
+            .recorded
+        )
         let coinsAfterRewards = manager.coins
 
         clock.setNow(initialDate.addingTimeInterval(-86_400))
@@ -1086,6 +1184,64 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    func testAchievementServiceCalendarOnlyCompatibilityCallRemainsAvailable() throws {
+        var progress = PlayerProgress.default
+        progress.bestSingleSessionScore = 100
+        let achievementService = AchievementService(variant: try makeAlternateVariant())
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let unlocked = achievementService.checkAchievements(
+            progress: progress,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(unlocked.contains(where: { $0.id == "score" }))
+    }
+
+    @available(*, deprecated, message: "Deliberately exercises the deprecated v0.1.2 formatter compatibility property.")
+    func testDailyStatsDateFormatterCompatibilityUsesIndependentInstances() throws {
+        let first: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+        let second: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+
+        XCTAssertFalse(first === second)
+        XCTAssertEqual(first.dateFormat, "yyyy-MM-dd")
+        XCTAssertEqual(first.timeZone, TimeZone.current)
+
+        let utc = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = utc
+        let fixedDate = try XCTUnwrap(
+            utcCalendar.date(from: DateComponents(year: 2026, month: 8, day: 9, hour: 0, minute: 30))
+        )
+        first.timeZone = utc
+        XCTAssertEqual(first.string(from: fixedDate), "2026-08-09")
+
+        first.dateFormat = "HH"
+        first.timeZone = TimeZone(identifier: "Pacific/Honolulu")!
+        let later: DateFormatter = PlayerProgress.dailyStatsDateFormatter
+        XCTAssertEqual(later.dateFormat, "yyyy-MM-dd")
+        XCTAssertEqual(later.timeZone, TimeZone.current)
+
+        var losAngeles = Calendar(identifier: .gregorian)
+        losAngeles.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        XCTAssertEqual(PlayerProgress.dateKey(for: fixedDate, calendar: losAngeles), "2026-08-08")
+
+        let variant = try makeAlternateVariant()
+        let manager = try PlayerProgressManager(
+            variant: variant,
+            questionDataService: QuestionDataService(variant: variant),
+            persistenceStore: FakePersistenceStore(),
+            clock: TestClock(now: fixedDate),
+            calendar: losAngeles
+        )
+        manager.recordAdvancedSessionStats(
+            PlayerProgressManager.SessionStatistics(calendar: losAngeles, now: fixedDate)
+        )
+        XCTAssertNotNil(manager.progress.dailyStats["2026-08-08"])
+        XCTAssertNil(manager.progress.dailyStats["00"])
+    }
+
     func testProgressManagerUsesTemporaryPersistenceAndInjectedTime() throws {
         let persistence = try TemporaryPersistence()
         var calendar = Calendar(identifier: .gregorian)
@@ -1141,7 +1297,10 @@ final class QuizEngineCoreTests: XCTestCase {
 
         let reloaded = try makeManager(store: store)
         XCTAssertEqual(reloaded.coins, 125)
-        XCTAssertEqual(reloaded.persistenceStatus, .loaded(schemaVersion: 1))
+        XCTAssertEqual(
+            reloaded.persistenceStatus,
+            .loaded(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
 
         let propertyList = try XCTUnwrap(
             try PropertyListSerialization.propertyList(from: try XCTUnwrap(store.primaryData), options: [], format: nil) as? [String: Any]
@@ -1254,7 +1413,10 @@ final class QuizEngineCoreTests: XCTestCase {
         let manager = try makeManager(store: store)
 
         XCTAssertEqual(manager.coins, 777)
-        XCTAssertEqual(manager.persistenceStatus, .recoveredFromBackup(schemaVersion: 1))
+        XCTAssertEqual(
+            manager.persistenceStatus,
+            .recoveredFromBackup(schemaVersion: QuizEnginePersistenceSchema.current)
+        )
         XCTAssertEqual(
             try PersistenceDocumentCodec.decode(
                 PlayerProgress.self,

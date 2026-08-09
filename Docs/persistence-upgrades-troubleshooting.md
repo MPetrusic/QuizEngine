@@ -2,7 +2,7 @@
 
 ## Storage contracts
 
-`PlayerProgressManager` stores progress in `Documents/player_progress.plist` unless the app injects a different URL or `QuizEnginePersistenceStore`. New files use a schema-1 property-list envelope with `schemaVersion` and `payload`. The following are persistent contracts after first release:
+`PlayerProgressManager` stores progress in `Documents/player_progress.plist` unless the app injects a different URL or `QuizEnginePersistenceStore`. New files use a schema-2 property-list envelope with `schemaVersion` and `payload`; see [schema versions and dispatch](#schema-versions-and-dispatch) for what older documents do. The following are persistent contracts after first release:
 
 - category IDs;
 - achievement IDs;
@@ -14,11 +14,48 @@ Renaming an ID, deleting a category that appears in saved progress, or reusing a
 
 Before a cutover or content update, decode the proposed question data and run `QuizContentValidator.validate(_:categories:)` with the final variant categories. It catches package-owned structural defects without inspecting app resources. Asset-catalog existence, editorial approval, sources, and distribution gates remain consumer responsibilities.
 
-QuizEngine has no automated historical installed-user save fixture yet. A consumer app must add one before changing its own persistence contract.
-
 For a genuinely fresh player with no primary progress document, `PlayerProgressManager` uses `variant.rules.economy.initialCoins`. Legacy/schema documents whose older payload omits `coins` or `totalCoinsEarned` continue to decode those fields as 100. Changing a variant's fresh balance never rewrites or reinterprets an existing player's stored balance.
 
 Daily rewards, app/play streaks, reward-ad cooldowns, achievements, and daily/hourly statistics use the manager's injected clock and calendar. A clock earlier than a stored streak, claim, play, or cooldown timestamp cannot advance or reset that rule. Local-day and DST behavior is defined by the injected calendar and time zone.
+
+## Schema versions and dispatch
+
+`QuizEnginePersistenceSchema` describes what this package can read:
+
+- `legacy` (0) — documents with no `schemaVersion` key at all, as written by `v0.1.x`;
+- `firstVersioned` (1) — the first released envelope version;
+- `current` (2) — the envelope version this package writes, adding the bounded reward-receipt ledger and durable Premium claim identity;
+- `decodableEnvelopeVersions` (1...2) — every versioned envelope that still decodes.
+
+Decoding dispatches on that range, not on equality with `current`. A schema-0 document loads as `.loadedLegacy`; a schema-1 document loads as `.loaded(schemaVersion: 1)`; and a schema-2 document loads as `.loaded(schemaVersion: 2)`. Schema-0 and schema-1 progress default the receipt ledger to empty without changing existing balances. A legacy Premium-received flag is converted to a permanent legacy claim identity so migration cannot award that one-time bonus again.
+
+The next successful save of schema 0 or schema 1 writes schema 2. Recovery from a prior-schema backup reports `.recoveredFromBackup`, restores that historical document verbatim, and leaves promotion until the next save. Only an unknown — that is, a future — version is rejected as `PersistenceError.unsupportedSchema`. The import marker follows the same rule so an interrupted import stays recoverable across an upgrade.
+
+Shipping a later schema therefore means bumping `current`, retaining the `v0.2.0` schema-1 fixture and every other historical fixture, and adding migration coverage from each prior supported schema. It never means widening an equality check or rewriting a historical fixture.
+
+## Historical fixtures
+
+`Tests/QuizEngineCoreTests/Resources/PersistenceFixtures` holds exact saved documents from every released schema, with [`manifest.json`](../Tests/QuizEngineCoreTests/Resources/PersistenceFixtures/manifest.json) as the index. It records, per file, the originating tag and commit, SHA-256 and byte count, the type and call that produced it, its storage path, its envelope and expected load status, how it was obtained, measured byte-equivalence with other releases, the confirmation that it holds no real user data or secret, and the values the originating tag's own decoder read back.
+
+| Release | Progress | Preferences | Envelope |
+| --- | --- | --- | --- |
+| `v0.1.0` | `player_progress_default.plist`, `player_progress_populated.plist` | `user_preferences.plist` | none — schema 0 |
+| `v0.1.1` | same two files | `user_preferences.plist` | none — schema 0 |
+| `v0.1.2` | same two files | `user_preferences.plist` | none — schema 0 |
+| `v0.1.3` | same two files | `user_preferences.plist` | none — schema 0 |
+| `v0.2.0` | `player_progress_schema_1.plist` | `user_preferences_schema_1.plist` | schema 1 |
+
+The four `v0.1.x` releases encode identical documents, and the manifest records that measured equivalence. Separate fixtures are kept per release anyway, so a later divergence is caught for the release it belongs to.
+
+`PersistenceFixtureMigrationTests` drives every entry through the public load, migration, save, reload, backup-recovery, and repeated-import paths. Regenerate the whole set with:
+
+```sh
+sh Scripts/generate-persistence-fixtures.sh
+```
+
+That script checks each exact tag out into a detached `git worktree`, builds the matching generator from `Scripts/PersistenceFixtureGenerators` against that tag's own sources, and runs it inside an isolated home directory, so no fixture is ever produced by current models or touches a real Documents directory. Never edit a generated document by hand; change the generator, rerun the script, and commit the new bytes and manifest together.
+
+These package fixtures do not replace a consumer's own upgrade rehearsal. A consumer app must still install an archived build using its old persistence contract, upgrade over it, and verify that its own legacy files and values reconcile, before changing its persistence contract.
 
 ## Failure and recovery contract
 

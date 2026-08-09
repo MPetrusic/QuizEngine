@@ -8,10 +8,39 @@ import Foundation
 import Darwin
 #endif
 
-/// The version of the persistence envelope written by the current package.
+/// The persistence schema versions this package understands.
+///
+/// Decoding dispatches on the range of released envelope versions rather than on
+/// equality with `current`. A document written by an earlier released schema must
+/// keep loading and be promoted by the next save; only an unknown — that is, a
+/// future — version is rejected. Bumping `current` when a new schema ships is
+/// therefore enough to keep every previously released document readable, and it
+/// cannot silently strand documents written by a shipped release.
 public enum QuizEnginePersistenceSchema {
+    /// Documents written before the versioned envelope existed. These have no
+    /// `schemaVersion` key at all and are recognized by the absence of the envelope.
     public static let legacy = 0
-    public static let current = 1
+
+    /// The first released envelope version.
+    public static let firstVersioned = 1
+
+    /// The envelope version written by the current package.
+    public static let current = 2
+
+    /// Every envelope version this package can decode.
+    public static var decodableEnvelopeVersions: ClosedRange<Int> {
+        firstVersioned...current
+    }
+
+    /// Whether an envelope carrying `version` can be decoded by this package.
+    public static func canDecodeEnvelope(version: Int) -> Bool {
+        decodableEnvelopeVersions.contains(version)
+    }
+
+    /// Whether a document decoded at `version` still has to be promoted on the next save.
+    public static func requiresPromotion(from version: Int) -> Bool {
+        version != current
+    }
 }
 
 /// Typed failures produced by QuizEngine persistence.
@@ -426,7 +455,7 @@ enum PersistenceDocumentCodec {
         if hasEnvelopeKey {
             do {
                 let envelope = try decoder.decode(PersistenceEnvelope<Value>.self, from: data)
-                guard envelope.schemaVersion == QuizEnginePersistenceSchema.current else {
+                guard QuizEnginePersistenceSchema.canDecodeEnvelope(version: envelope.schemaVersion) else {
                     throw PersistenceError.unsupportedSchema(
                         path: path,
                         version: envelope.schemaVersion
@@ -504,7 +533,9 @@ enum PersistenceMarkerCodec {
     static func decode(from data: Data, path: String) throws -> ImportMarker {
         do {
             let marker = try PropertyListDecoder().decode(ImportMarker.self, from: data)
-            guard marker.schemaVersion == QuizEnginePersistenceSchema.current,
+            // A marker written by an earlier released schema must still be recognized,
+            // or an interrupted import would become unrecoverable across an upgrade.
+            guard QuizEnginePersistenceSchema.canDecodeEnvelope(version: marker.schemaVersion),
                   !marker.identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !marker.sourceFingerprint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   marker.targetProgress != nil else {

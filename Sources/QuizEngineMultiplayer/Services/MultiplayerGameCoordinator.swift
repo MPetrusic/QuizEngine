@@ -10,6 +10,7 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
     private static let questionResultTimeout: TimeInterval = 5
     private static let gameConfigTimeout: TimeInterval = 10
     private static let gameEndTimeout: TimeInterval = 5
+    private static let sequenceGapTimeout: TimeInterval = 5
     private static let maximumReplayCache = 128
 
     @Published public private(set) var opponent: MultiplayerPlayer?
@@ -52,7 +53,22 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
     private var matchConfiguration: MultiplayerMatchConfiguration?
     private var nextSequence: UInt64 = 0
     private var seenMessageIDs: [UUID] = []
-    private var seenSequences: [UInt64] = []
+    private var sequenceBuffer = MultiplayerSequenceBuffer()
+    private var sequenceGapTimeoutTask: (any QuizEngineScheduledTask)?
+
+    /// The questions the match is being played with, from the configuration this peer sent or
+    /// accepted. Round payloads are validated against the question they claim to describe.
+    private(set) var activeQuestions: [Question] = []
+
+    /// Why the last game configuration was refused. Retained for diagnostics and tests; the
+    /// terminal outcome itself is `MultiplayerSessionFailure.invalidConfiguration`.
+    private(set) var lastConfigurationRejections: [MultiplayerConfigurationRejection] = []
+
+    /// The question the session is currently playing, if the round index is still in range.
+    private var activeQuestion: Question? {
+        guard questionsCompleted >= 0, questionsCompleted < activeQuestions.count else { return nil }
+        return activeQuestions[questionsCompleted]
+    }
 
     public init(
         analytics: (any AnalyticsProvider)? = nil,
@@ -102,6 +118,7 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         lifecycleGeneration &+= 1
         isGameActive = false
         cancelAllTimeoutTasks()
+        sequenceBuffer.reset()
         eventListenerTask?.cancel()
         rawListenerTask?.cancel()
         eventListenerTask = nil
@@ -132,10 +149,35 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         startReadyTimeout()
     }
 
+    /// Sends the host's game configuration.
+    ///
+    /// A hardened configuration is validated before transmission with exactly the rules the guest
+    /// applies on receipt, so an unplayable match ends here instead of after the guest has already
+    /// loaded it.
     public func sendGameConfig(_ config: GameConfigPayload) {
         guard canSend else { return }
-        if isHardenedMatch { sendWire(.gameConfig(.init(config))) }
-        else { try? transport?.send(message: .gameConfig(config)) }
+        guard let configuration = matchConfiguration else {
+            try? transport?.send(message: .gameConfig(config))
+            return
+        }
+        guard acceptConfiguration(config, configuration: configuration) else { return }
+        sendWire(.gameConfig(.init(config)))
+    }
+
+    /// Validates a configuration against the match content policy and adopts it on success.
+    private func acceptConfiguration(
+        _ config: GameConfigPayload,
+        configuration: MultiplayerMatchConfiguration
+    ) -> Bool {
+        let rejections = MultiplayerPayloadValidator.rejections(for: config, configuration: configuration)
+        guard rejections.isEmpty else {
+            lastConfigurationRejections = rejections
+            fail(.invalidConfiguration)
+            return false
+        }
+        lastConfigurationRejections = []
+        activeQuestions = config.questions
+        return true
     }
 
     public func sendAnswer(_ answer: AnswerPayload) {
@@ -227,7 +269,9 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         lastGuestScore = 0
         nextSequence = 0
         seenMessageIDs = []
-        seenSequences = []
+        sequenceBuffer.reset()
+        activeQuestions = []
+        lastConfigurationRejections = []
     }
 
     private func transition(to newState: MultiplayerSessionState) {
@@ -237,6 +281,8 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
             lifecycleGeneration &+= 1
             isGameActive = false
             cancelAllTimeoutTasks()
+            // Nothing buffered may survive into a later match.
+            sequenceBuffer.reset()
         }
     }
 
@@ -260,6 +306,26 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         guard !sessionState.isTerminal else { return }
         gameEndResult = payload
         transition(to: .disconnected(payload))
+    }
+
+    /// Ends the session because a phase deadline elapsed.
+    ///
+    /// The first terminal outcome wins, so a callback that survives cancellation cannot replace an
+    /// outcome that has already been recorded.
+    private func endWithTimeout(
+        _ timeout: MultiplayerTimeout,
+        hostScore: Int? = nil,
+        guestScore: Int? = nil
+    ) {
+        guard !sessionState.isTerminal else { return }
+        terminalFailure = .timedOut(timeout)
+        disconnect(
+            GameEndPayload(
+                hostFinalScore: hostScore ?? lastHostScore,
+                guestFinalScore: guestScore ?? lastGuestScore,
+                reason: .disconnected
+            )
+        )
     }
 
     private func startLegacyListening() {
@@ -309,46 +375,102 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         handleEnvelope(envelope)
     }
 
+    /// Applies the ordering policy, then dispatches whatever became contiguous.
+    ///
+    /// See `MultiplayerSequenceBuffer` for the policy itself. Nothing reaches payload handling out
+    /// of order, so no handler needs its own reordering tolerance.
     private func handleEnvelope(_ envelope: MultiplayerWireEnvelope) {
-        guard let configuration = matchConfiguration else { return }
-        switch envelope.payload {
-        case .hello(let handshake):
-            guard role == .guest else { return }
-            if handshakeAccepted, envelope.matchID == matchID {
-                guard validate(handshake, configuration: configuration) else { return }
-                sendHandshake(MultiplayerWirePayload.acknowledged)
-                return
-            }
-            guard matchID == nil else { return }
-            guard validate(handshake, configuration: configuration) else { return }
-            matchID = envelope.matchID
-            handshakeAccepted = true
-            handshakeStatus = .accepted
-            gameConfigTimeoutTask?.cancel()
-            sendHandshake(MultiplayerWirePayload.acknowledged)
-            startGameConfigTimeout()
+        guard matchConfiguration != nil else { return }
+        guard !seenMessageIDs.contains(envelope.messageID) else { return }
+
+        switch sequenceBuffer.admit(envelope) {
+        case .duplicate:
             return
-        case .acknowledged(let handshake):
-            guard role == .host, envelope.matchID == matchID else { return }
-            guard validate(handshake, configuration: configuration) else { return }
-            guard !handshakeAccepted else { return }
-            handshakeAccepted = true
-            handshakeStatus = .accepted
-            gameConfigTimeoutTask?.cancel()
+        case .gapTooLarge:
+            fail(.sequenceGap)
             return
-        default:
+        case .bufferOverflow:
+            fail(.sequenceBufferOverflow)
+            return
+        case .buffered:
+            startSequenceGapTimeout()
+            return
+        case .ready:
             break
         }
 
-        guard handshakeAccepted else { fail(.unexpectedMessage); return }
-        guard envelope.matchID == matchID else { return }
-        guard !seenMessageIDs.contains(envelope.messageID) else { return }
-        guard !seenSequences.contains(envelope.sequence) else { return }
-        seenMessageIDs.append(envelope.messageID)
+        var next: MultiplayerWireEnvelope? = envelope
+        while let current = next, !sessionState.isTerminal {
+            sequenceBuffer.commit(current)
+            rememberMessageID(current.messageID)
+            dispatch(current)
+            next = sequenceBuffer.takeNextContiguous()
+        }
+
+        if sequenceBuffer.hasBufferedMessages, !sessionState.isTerminal {
+            startSequenceGapTimeout()
+        } else {
+            sequenceGapTimeoutTask?.cancel()
+            sequenceGapTimeoutTask = nil
+        }
+    }
+
+    private func rememberMessageID(_ messageID: UUID) {
+        seenMessageIDs.append(messageID)
         if seenMessageIDs.count > Self.maximumReplayCache { seenMessageIDs.removeFirst() }
-        seenSequences.append(envelope.sequence)
-        if seenSequences.count > Self.maximumReplayCache { seenSequences.removeFirst() }
-        handleSecurePayload(envelope.payload)
+    }
+
+    private func dispatch(_ envelope: MultiplayerWireEnvelope) {
+        guard let configuration = matchConfiguration else { return }
+        switch envelope.payload {
+        case .hello(let handshake):
+            handleHello(handshake, envelope: envelope, configuration: configuration)
+        case .acknowledged(let handshake):
+            handleAcknowledged(handshake, envelope: envelope, configuration: configuration)
+        default:
+            guard envelope.matchID == matchID else { return }
+            guard handshakeAccepted else { fail(.unexpectedMessage); return }
+            handleSecurePayload(envelope.payload, configuration: configuration)
+        }
+    }
+
+    private func handleHello(
+        _ handshake: MultiplayerHandshakePayload,
+        envelope: MultiplayerWireEnvelope,
+        configuration: MultiplayerMatchConfiguration
+    ) {
+        // Only a host opens a match, so a host receiving one is a protocol violation.
+        guard role == .guest else { fail(.unexpectedMessage); return }
+        guard validate(handshake, configuration: configuration) else { return }
+
+        guard matchID == nil else {
+            // The host may repeat its opening message; re-acknowledge the established match only.
+            guard envelope.matchID == matchID else { return }
+            sendHandshake(MultiplayerWirePayload.acknowledged)
+            return
+        }
+
+        matchID = envelope.matchID
+        handshakeAccepted = true
+        handshakeStatus = .accepted
+        gameConfigTimeoutTask?.cancel()
+        sendHandshake(MultiplayerWirePayload.acknowledged)
+        startGameConfigTimeout()
+    }
+
+    private func handleAcknowledged(
+        _ handshake: MultiplayerHandshakePayload,
+        envelope: MultiplayerWireEnvelope,
+        configuration: MultiplayerMatchConfiguration
+    ) {
+        // Only a guest acknowledges, so a guest receiving one is a protocol violation.
+        guard role == .host else { fail(.unexpectedMessage); return }
+        guard envelope.matchID == matchID else { return }
+        guard validate(handshake, configuration: configuration) else { return }
+        guard !handshakeAccepted else { return }
+        handshakeAccepted = true
+        handshakeStatus = .accepted
+        gameConfigTimeoutTask?.cancel()
     }
 
     private func validate(_ handshake: MultiplayerHandshakePayload, configuration: MultiplayerMatchConfiguration) -> Bool {
@@ -377,68 +499,98 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         nextSequence &+= 1
         guard let data = try? MultiplayerWireCodec.encode(envelope) else { fail(.malformedPayload); return }
         do { try transport?.sendRawPayload(data) }
-        catch { fail(.unexpectedMessage) }
+        catch { fail(.transportFailure) }
     }
 
-    private func handleSecurePayload(_ payload: MultiplayerWirePayload) {
+    /// Handles a payload that arrived in order, from the expected sender, for the established match.
+    ///
+    /// Three outcomes are possible and each is deterministic:
+    ///
+    /// - the payload is applied;
+    /// - the payload is a stale or duplicate restatement of a round already settled, and is
+    ///   ignored;
+    /// - the payload could not be produced by a peer following the protocol under this match's
+    ///   content and scoring rules, and the session ends with a typed failure.
+    private func handleSecurePayload(
+        _ payload: MultiplayerWirePayload,
+        configuration: MultiplayerMatchConfiguration
+    ) {
         switch payload {
         case .gameConfig(let wireConfig):
-            guard role == .guest else { return }
+            // Only a host configures a match.
+            guard role == .guest else { fail(.unexpectedMessage); return }
+            // The host retries delivery, so repeating an accepted configuration is harmless.
             guard receivedGameConfig == nil else { return }
             let config = wireConfig.makeGameConfig()
-            guard valid(config) else { fail(.malformedPayload); return }
+            guard acceptConfiguration(config, configuration: configuration) else { return }
             receivedGameConfig = config
             gameConfigTimeoutTask?.cancel()
+
         case .playerReady(let roundIndex):
+            guard hasActiveContent() else { return }
             guard roundIndex == questionsCompleted else { return }
             receiveReady()
+
         case .answerSubmitted(let answer):
-            guard valid(answer), answer.questionIndex == questionsCompleted, opponentAnswer == nil else { return }
+            guard hasActiveContent() else { return }
+            guard answer.questionIndex == questionsCompleted else { return }
+            guard let question = activeQuestion else { fail(.unexpectedPhase); return }
+            guard MultiplayerPayloadValidator.isValidAnswer(
+                answer,
+                activeRoundIndex: questionsCompleted,
+                question: question,
+                rules: configuration.multiplayerRules
+            ) else { fail(.invalidRoundPayload); return }
+            guard opponentAnswer == nil else { return }
             opponentAnswer = answer
+
         case .questionResult(let result):
-            guard role == .guest, valid(result), result.questionIndex == questionsCompleted, questionResult == nil else { return }
+            // Only a host scores a round.
+            guard role == .guest else { fail(.unexpectedMessage); return }
+            guard hasActiveContent() else { return }
+            guard result.questionIndex == questionsCompleted else { return }
+            guard let question = activeQuestion else { fail(.unexpectedPhase); return }
+            guard MultiplayerPayloadValidator.isValidQuestionResult(
+                result,
+                activeRoundIndex: questionsCompleted,
+                question: question,
+                previousHostScore: lastHostScore,
+                previousGuestScore: lastGuestScore,
+                rules: configuration.multiplayerRules
+            ) else { fail(.invalidRoundPayload); return }
+            guard questionResult == nil else { return }
             questionResult = result
             questionResultTimeoutTask?.cancel()
+
         case .gameEnd(let result):
-            guard role == .guest else { return }
-            guard result.reason != .completed || questionsCompleted > 0 else { return }
-            if questionsCompleted > 0,
-               (result.hostFinalScore != lastHostScore || result.guestFinalScore != lastGuestScore) {
-                return
-            }
+            // Only a host ends a match.
+            guard role == .guest else { fail(.unexpectedMessage); return }
+            guard MultiplayerPayloadValidator.isValidGameEnd(
+                result,
+                questionsCompleted: questionsCompleted,
+                hostScore: lastHostScore,
+                guestScore: lastGuestScore
+            ) else { return }
             finish(result)
+
         case .pause:
             receivePause()
+
         case .resume:
             receiveResume()
+
         case .hello, .acknowledged:
+            // Handshake payloads are dispatched before this point; reaching here is a violation.
             fail(.unexpectedMessage)
         }
     }
 
-    private func valid(_ config: GameConfigPayload) -> Bool {
-        guard !config.questions.isEmpty, config.questions.count <= 100,
-              Set(config.questions.map(\.id)).count == config.questions.count else { return false }
-        return config.questions.allSatisfy { question in
-            question.id > 0 && !question.question.isEmpty && question.question.utf8.count <= 4_096 &&
-            question.answers.count >= 2 && question.answers.count <= 16 &&
-            question.answers.filter(\.correct).count == 1 &&
-            question.answers.allSatisfy { !$0.text.isEmpty && $0.text.utf8.count <= 4_096 } &&
-            !question.categories.isEmpty && question.categories.count <= 8 &&
-            question.categories.allSatisfy { !$0.isEmpty && $0.utf8.count <= 128 } &&
-            (question.imageName?.utf8.count ?? 0) <= 256 &&
-            (question.description?.utf8.count ?? 0) <= 8_192
-        }
-    }
-
-    private func valid(_ answer: AnswerPayload) -> Bool {
-        answer.answerIndex >= -2 && answer.answerIndex <= 15 && answer.responseTimeMs >= 0 && answer.responseTimeMs <= 3_600_000
-    }
-
-    private func valid(_ result: QuestionResultPayload) -> Bool {
-        result.correctAnswerIndex >= 0 && result.correctAnswerIndex <= 15 &&
-        result.hostResponseTimeMs >= 0 && result.hostResponseTimeMs <= 3_600_000 &&
-        result.guestResponseTimeMs >= 0 && result.guestResponseTimeMs <= 3_600_000
+    /// Whether a configuration has been adopted. A round payload before one is legal in a later
+    /// phase but not in this one, so it ends the session rather than being silently dropped.
+    private func hasActiveContent() -> Bool {
+        guard activeQuestions.isEmpty else { return true }
+        fail(.unexpectedPhase)
+        return false
     }
 
     private func handleLegacyMessage(_ message: MultiplayerMessage) {
@@ -467,7 +619,13 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         startPauseTimeout()
     }
 
+    /// Resumes only a session this peer actually paused.
+    ///
+    /// Ordering guarantees a resume cannot overtake its pause, so a resume without one is a
+    /// redundant restatement — a peer foregrounding after a suppressed background, for example —
+    /// and is ignored rather than moving the session into a phase it never left.
     private func receiveResume() {
+        guard sessionState == .opponentPaused else { return }
         pauseTimeoutTask?.cancel()
         let previous = stateBeforeInterruption ?? .playing
         stateBeforeInterruption = nil
@@ -518,7 +676,7 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
                 self.readyRetryCount += 1
                 self.sendPlayerReady()
             } else {
-                self.disconnect(GameEndPayload(hostFinalScore: self.lastHostScore, guestFinalScore: self.lastGuestScore, reason: .disconnected))
+                self.endWithTimeout(.ready)
             }
         }
     }
@@ -542,7 +700,22 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         let generation = lifecycleGeneration
         gameConfigTimeoutTask = scheduler.schedule(after: Self.gameConfigTimeout) { [weak self] in
             guard let self, self.lifecycleGeneration == generation, self.receivedGameConfig == nil else { return }
-            self.disconnect(GameEndPayload(hostFinalScore: 0, guestFinalScore: 0, reason: .disconnected))
+            self.endWithTimeout(.gameConfiguration, hostScore: 0, guestScore: 0)
+        }
+    }
+
+    /// Ends the session when a missing sequence never arrives.
+    ///
+    /// Without this, a peer that drops one message could hold the session open indefinitely with
+    /// messages it can never deliver in order.
+    private func startSequenceGapTimeout() {
+        guard sequenceGapTimeoutTask == nil else { return }
+        let generation = lifecycleGeneration
+        sequenceGapTimeoutTask = scheduler.schedule(after: Self.sequenceGapTimeout) { [weak self] in
+            guard let self, self.lifecycleGeneration == generation else { return }
+            self.sequenceGapTimeoutTask = nil
+            guard self.sequenceBuffer.hasBufferedMessages else { return }
+            self.endWithTimeout(.sequenceGap)
         }
     }
 
@@ -553,5 +726,6 @@ public final class MultiplayerGameCoordinator: ObservableObject, MultiplayerGame
         questionResultTimeoutTask?.cancel(); questionResultTimeoutTask = nil
         gameConfigTimeoutTask?.cancel(); gameConfigTimeoutTask = nil
         gameEndTimeoutTask?.cancel(); gameEndTimeoutTask = nil
+        sequenceGapTimeoutTask?.cancel(); sequenceGapTimeoutTask = nil
     }
 }
