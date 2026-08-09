@@ -31,8 +31,8 @@ public final class AchievementService {
 
     public func checkAchievements(
         progress: PlayerProgress,
-        date: Date,
-        calendar: Calendar
+        date: Date = Date(),
+        calendar: Calendar = .current
     ) -> [AchievementDefinition] {
         definitions.filter {
             !progress.unlockedAchievements.contains($0.id)

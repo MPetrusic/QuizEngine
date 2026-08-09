@@ -19,7 +19,7 @@ Remediation of the audited v0.2.0 release blockers. The published `v0.2.0` tag i
 - QEB-04: add schema 2 with a bounded durable reward-receipt ledger and a separately persisted, non-prunable Premium claim identity; schema-0 and the committed `v0.2.0` schema-1 documents retain their balances and promote on their next save.
 - QEB-04: add atomic, receipt-backed rewarded-ad and Premium bonus transactions with typed duplicate, conflict, eligibility, rejection, and persistence-failure outcomes, checked arithmetic, and full rollback on failed saves.
 - QEB-04: deprecate the source-compatible reward bridges, make rewarded-ad bridges cooldown-gated and rollback-safe, and make the Premium marker a non-awarding legacy claim marker. Advertising SDK, StoreKit, entitlement resolution, Premium amount policy, and stable provider receipt acquisition remain app-owned.
-- QEB-05: restore the deprecated v0.1.2 `PlayerProgress.dailyStatsDateFormatter` source-compatibility property as a fresh formatter on every access; deterministic engine date paths continue to use `dateKey(for:calendar:)` with explicit calendars.
+- QEB-05: restore the deprecated v0.1.2 `PlayerProgress.dailyStatsDateFormatter` source-compatibility property as a fresh formatter on every access and restore the calendar-only `AchievementService.checkAchievements` call shape; deterministic engine date paths continue to use explicit clocks and calendars.
 
 ## v0.2.0
 

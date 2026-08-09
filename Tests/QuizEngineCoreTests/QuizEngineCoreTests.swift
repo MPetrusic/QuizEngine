@@ -1184,6 +1184,21 @@ final class QuizEngineCoreTests: XCTestCase {
         )
     }
 
+    func testAchievementServiceCalendarOnlyCompatibilityCallRemainsAvailable() throws {
+        var progress = PlayerProgress.default
+        progress.bestSingleSessionScore = 100
+        let achievementService = AchievementService(variant: try makeAlternateVariant())
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        let unlocked = achievementService.checkAchievements(
+            progress: progress,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(unlocked.contains(where: { $0.id == "score" }))
+    }
+
     @available(*, deprecated, message: "Deliberately exercises the deprecated v0.1.2 formatter compatibility property.")
     func testDailyStatsDateFormatterCompatibilityUsesIndependentInstances() throws {
         let first: DateFormatter = PlayerProgress.dailyStatsDateFormatter
