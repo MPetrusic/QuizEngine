@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.2.3
+
+Three additive engine changes raised by AmericanQuiz product design (QE-A1, QE-A5, QE-A6). **No removals, no signature changes, and no persistence or wire-protocol change.** A consumer built against `0.2.2` compiles and behaves identically without touching a line.
+
+### QE-A1 — difficulty progression is a supported path again
+
+`applyDifficultyProgression` was private and reachable only from `getQuestionsForSessionWithDifficulty`, which was deprecated with the message "Difficulty progression not currently used". All three live builders shuffled with no regard to difficulty, so easy-to-hard sequencing was inert no matter what a consumer's content carried.
+
+- Add `QuizDifficultyProgression` (`none` | `easyToHard`) and `QuizSessionRules.difficultyProgression`, **defaulted to `none`**, so existing behavior and the existing initializer signature are both preserved.
+- Apply it in `getQuestionsForCompetitiveMode`, `getQuestionsForCategoryMode`, and `getQuestionsForPracticeMode`. `getQuestionsForMultiplayerMatch` is deliberately excluded: a fixed match shared by two players has no meaningful ramp, and both sides must see one identical order.
+- The session limit is applied **before** the ordering. Ordering a 175-question bank and then taking the first 20 would have handed the player twenty easy questions and called it a session.
+
+**Two defects in the ordering algorithm itself, found while restoring it, and fixed:**
+
+- It placed questions at the **absolute positions 5 and 15**, which were written for a 20-question session. A survival run over the whole bank — a consumer that sets no `competitiveQuestionLimit` — opened with five easy questions, ten medium, and then every remaining question at hard.
+- When a band ran dry the preferred/fallback chain fell back to an adjacent one, so a surplus of **easy** questions could be stranded at the *end* of a session. An easy question served last is precisely what an easy-to-hard ramp promises not to do.
+
+Both are replaced by ordering the session by difficulty and shuffling within each difficulty. Band widths now follow the session's own composition, there is nothing left over to misplace, and where supply matched the old bands — 20 questions holding 5 easy, 10 medium and 5 hard — the output is identical to what the fixed positions produced. Deterministic under an injected generator, per QE-4.
+
+`getQuestionsForSessionWithDifficulty` remains deprecated, but its message now points at the supported path instead of claiming the ramp is unused.
+
+### QE-A5 — neutral session pause and resume
+
+- Add `QuizViewModel.pauseSession()` and `resumeSession()` over the existing `sessionTimingPaused` mechanism. `handleAppBackgrounded()` and `handleAppForegrounded()` are unchanged in behavior and now delegate to them.
+
+The behavior was already correct but reachable only through the lifecycle methods, so an app pausing for its own reason — a confirmation sheet over a live run — had to claim a backgrounding that never happened. The documented workaround, `stopTimer()`, is not equivalent: it does **not** hold an active time freeze, which keeps draining while the run is not being played.
+
+### QE-A6 — answer submission
+
+- Add `QuizViewModel.answer(at:)` returning `AnswerOutcome` (`correct` | `wrong` | `rejected`).
+
+The only entry points were `increaseScoreForCorrectAnswer()` and `reduceLivesRemaining()`, which left **the caller deciding whether an answer was right** — a game rule on the app side of the boundary, reimplemented identically by every consumer or diverging silently in one of them. Correctness now comes from the question's own `Answer.correct`. Both older methods remain public for consumers that adjudicate elsewhere.
+
+`rejected` is deliberately distinct from `wrong`: a tap refused by the answer lock, a terminal session, or an out-of-range index must not cost a life.
+
+### Not in this release
+
+**QE-A2 (a multiplayer achievement rule) is deferred.** Adding a case to the public `AchievementRule` enum is source-breaking for any consumer that switches over it exhaustively, and at least one does. It gates nothing at launch — multiplayer is a later phase, and the consuming app's achievement catalog deliberately ships without multiplayer entries — so the break buys nothing today. It belongs in the release that actually wants multiplayer achievements.
+
 ## v0.2.2
 
 Documentation only. No public API, behavior, persistence, or wire-protocol change from `v0.2.1`; the two releases are functionally identical.

@@ -156,25 +156,49 @@ public struct QuizInterstitialEligibilityRules: Equatable, Sendable {
     }
 }
 
+/// How a session orders the questions it has drawn.
+///
+/// Ordering is a variant choice rather than an engine constant, for the same
+/// reason every other rule in this file is: a consumer that wants an easy-to-hard
+/// ramp and a consumer that wants a pure shuffle are both right, and neither
+/// should have to fork the builders to get it.
+public enum QuizDifficultyProgression: String, Equatable, Sendable, CaseIterable, Codable {
+    /// Shuffle only. The behaviour of every builder through `0.2.2`, and the
+    /// default, so an existing consumer sees no change.
+    case none
+    /// Easiest first, hardest last, in proportion to the session's own length.
+    case easyToHard
+}
+
 public struct QuizSessionRules: Equatable, Sendable {
     public let competitiveQuestionLimit: Int?
     public let categoryQuestionLimit: Int?
     public let practiceQuestionCount: Int
     public let practiceUnansweredRatio: Double
     public let multiplayerQuestionCount: Int
+    /// Applies to the competitive, category, and practice builders.
+    ///
+    /// **Multiplayer is deliberately excluded.** A fixed match shared by two
+    /// players has no meaningful ramp, and both sides must see one identical
+    /// order regardless of either player's history.
+    public let difficultyProgression: QuizDifficultyProgression
 
+    /// `difficultyProgression` is defaulted so this stays source-compatible for
+    /// every consumer built against `0.2.2` or earlier.
     public init(
         competitiveQuestionLimit: Int?,
         categoryQuestionLimit: Int?,
         practiceQuestionCount: Int,
         practiceUnansweredRatio: Double,
-        multiplayerQuestionCount: Int
+        multiplayerQuestionCount: Int,
+        difficultyProgression: QuizDifficultyProgression = .none
     ) {
         self.competitiveQuestionLimit = competitiveQuestionLimit
         self.categoryQuestionLimit = categoryQuestionLimit
         self.practiceQuestionCount = practiceQuestionCount
         self.practiceUnansweredRatio = practiceUnansweredRatio
         self.multiplayerQuestionCount = multiplayerQuestionCount
+        self.difficultyProgression = difficultyProgression
     }
 }
 

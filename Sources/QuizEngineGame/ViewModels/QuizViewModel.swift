@@ -358,6 +358,42 @@ public class QuizViewModel: ObservableObject {
         timeRemaining = rules.solo.timerDurationSeconds
     }
 
+    /// What happened when an answer was submitted.
+    public enum AnswerOutcome: Equatable, Sendable {
+        case correct
+        case wrong
+        /// Nothing was adjudicated: taps are locked, the session is over, or the
+        /// index names no answer on the current question. Distinct from `wrong`
+        /// on purpose — a refused tap must not cost a life.
+        case rejected
+    }
+
+    /// Submits the player's chosen answer and adjudicates it.
+    ///
+    /// **This is the rule that used to live in every consumer.** The only entry
+    /// points were `increaseScoreForCorrectAnswer()` and `reduceLivesRemaining()`,
+    /// which left the *caller* deciding whether an answer was right — a game rule
+    /// on the app side of the boundary, reimplemented identically by every
+    /// consumer or diverging silently in one of them. Those two remain public
+    /// for callers that adjudicate elsewhere, and this routes to them.
+    ///
+    /// Correctness comes from the question's own `Answer.correct`, so a consumer
+    /// cannot award a point for the wrong answer even by accident.
+    @discardableResult
+    public func answer(at index: Int) -> AnswerOutcome {
+        guard shouldAllowTap, !sessionState.isTerminal else { return .rejected }
+        guard questionNumber >= 0, questionNumber < questionData.count else { return .rejected }
+        let answers = questionData[questionNumber].answers
+        guard index >= 0, index < answers.count else { return .rejected }
+
+        if answers[index].correct {
+            increaseScoreForCorrectAnswer()
+            return .correct
+        }
+        reduceLivesRemaining()
+        return .wrong
+    }
+
     public func increaseScoreForCorrectAnswer() {
         synchronizeTimer()
         guard !publish(sessionReducer.lockAnswer(.correct)) else { return }
@@ -665,8 +701,22 @@ public class QuizViewModel: ObservableObject {
         synchronizeTimer()
     }
 
-    /// Pauses rule-critical question and freeze timing without counting background duration.
-    public func handleAppBackgrounded() {
+    /// Pauses rule-critical question and freeze timing for any reason.
+    ///
+    /// Backgrounding is one such reason; a modal the app puts over a live run is
+    /// another. Until this existed the only way to reach the behaviour was
+    /// `handleAppBackgrounded()`, which a consumer had to call when no
+    /// backgrounding had happened — a lie in the call site that also fired
+    /// whatever else that method might grow to do.
+    ///
+    /// This is the whole behaviour, not a subset: it stops the timer, pauses an
+    /// active freeze, and records which of the two was running. Reaching for
+    /// `stopTimer()` instead — the workaround an app has to use without this —
+    /// leaves an active time freeze draining while the run is not being played.
+    ///
+    /// Idempotent: pausing an already-paused session does nothing, so it cannot
+    /// lose the record of what was running.
+    public func pauseSession() {
         guard !isPracticeMode, !shouldPresentResultView, !sessionTimingPaused else { return }
         timerWasRunningBeforePause = timerIsRunning
         stopTimer()
@@ -674,8 +724,10 @@ public class QuizViewModel: ObservableObject {
         sessionTimingPaused = true
     }
 
-    /// Resumes only the timing that was active before backgrounding.
-    public func handleAppForegrounded() {
+    /// Resumes only the timing that was active when the session was paused.
+    ///
+    /// Idempotent, and a no-op on a session that was never paused.
+    public func resumeSession() {
         guard sessionTimingPaused, !shouldPresentResultView else { return }
         sessionTimingPaused = false
         if isTimeFrozen {
@@ -684,6 +736,20 @@ public class QuizViewModel: ObservableObject {
             startTimer()
         }
         timerWasRunningBeforePause = false
+    }
+
+    /// Pauses rule-critical question and freeze timing without counting background duration.
+    ///
+    /// Kept as the lifecycle-named entry point, and deliberately still distinct
+    /// from `pauseSession()` at the call site: an app should say which of the two
+    /// actually happened, even though today they do the same thing.
+    public func handleAppBackgrounded() {
+        pauseSession()
+    }
+
+    /// Resumes only the timing that was active before backgrounding.
+    public func handleAppForegrounded() {
+        resumeSession()
     }
 
     private func showRewardProposalView() {

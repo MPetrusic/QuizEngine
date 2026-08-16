@@ -168,8 +168,13 @@ public final class QuestionDataService: QuestionDataServiceProvider {
     public func getQuestionsForCompetitiveMode() throws -> [Question] {
         let allQuestions = try getQuestionData().questions
         let shuffled = allQuestions.shuffled(using: &randomNumberGenerator)
-        guard let limit = rules.sessions.competitiveQuestionLimit else { return shuffled }
-        return Array(shuffled.prefix(limit))
+        // The limit is applied before the ramp, never after: ordering a bank of
+        // 175 and then taking the first 20 would hand the player twenty easy
+        // questions and call it a session.
+        guard let limit = rules.sessions.competitiveQuestionLimit else {
+            return orderedByConfiguredProgression(shuffled)
+        }
+        return orderedByConfiguredProgression(Array(shuffled.prefix(limit)))
     }
 
     // MARK: - Category Mode (All Questions from Category)
@@ -177,8 +182,10 @@ public final class QuestionDataService: QuestionDataServiceProvider {
     public func getQuestionsForCategoryMode(category: String) throws -> [Question] {
         let categoryQuestions = try getQuestions(category: category, difficulty: nil)
         let shuffled = categoryQuestions.shuffled(using: &randomNumberGenerator)
-        guard let limit = rules.sessions.categoryQuestionLimit else { return shuffled }
-        return Array(shuffled.prefix(limit))
+        guard let limit = rules.sessions.categoryQuestionLimit else {
+            return orderedByConfiguredProgression(shuffled)
+        }
+        return orderedByConfiguredProgression(Array(shuffled.prefix(limit)))
     }
 
     // MARK: - Multiplayer Mode (Random from All Categories)
@@ -256,7 +263,9 @@ public final class QuestionDataService: QuestionDataServiceProvider {
             session += extra.prefix(sessionSize - session.count)
         }
 
-        let questionsToReturn = session.shuffled(using: &randomNumberGenerator)
+        let questionsToReturn = orderedByConfiguredProgression(
+            session.shuffled(using: &randomNumberGenerator)
+        )
 
         return PracticeSessionResult(
             questions: questionsToReturn,
@@ -296,7 +305,16 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         return session.shuffled(using: &randomNumberGenerator).prefix(sessionSize).map { $0 }
     }
 
-    @available(*, deprecated, message: "Difficulty progression not currently used")
+    /// Still deprecated, but no longer for the reason the old message gave.
+    ///
+    /// Difficulty progression **is** used now — it is a variant rule, applied by
+    /// the three live builders. This entry point stays deprecated because it is
+    /// built on the deprecated `getQuestionsForSession`, not because the ramp is
+    /// unused.
+    @available(
+        *, deprecated,
+        message: "Set QuizSessionRules.difficultyProgression to .easyToHard and use the competitive, category, or practice builder"
+    )
     public func getQuestionsForSessionWithDifficulty(
         category: String?,
         correctlyAnsweredIDs: Set<Int>,
@@ -338,59 +356,57 @@ public final class QuestionDataService: QuestionDataServiceProvider {
         )
     }
 
+    /// Applies the variant's configured ordering, if it asked for one.
+    ///
+    /// The gate is here rather than in each builder so `none` — every consumer
+    /// built against `0.2.2` — returns the caller's array untouched, including
+    /// its identity, and cannot pay for a difficulty pass it did not request.
+    private func orderedByConfiguredProgression(_ questions: [Question]) -> [Question] {
+        switch rules.sessions.difficultyProgression {
+        case .none:
+            return questions
+        case .easyToHard:
+            return applyDifficultyProgression(to: questions)
+        }
+    }
+
+    /// Orders a session easiest-first, shuffling within each difficulty so two
+    /// runs over the same bank are not the same run.
+    ///
+    /// **This replaces a fixed-position band walk** that placed questions at
+    /// absolute positions 5 and 15 with a preferred/fallback chain. Two things
+    /// were wrong with it:
+    ///
+    /// - The positions were written for a 20-question session. AmericanQuiz's
+    ///   competitive mode sets no `competitiveQuestionLimit`, so a run is the
+    ///   whole bank — under fixed positions a 175-question run opened with five
+    ///   easy questions, ten medium, and then a hundred and sixty hard ones.
+    /// - When a band ran dry the chain fell back to an adjacent one, so a
+    ///   surplus of easy questions could be stranded at the *end* of the
+    ///   session. An easy question served last is exactly what an easy-to-hard
+    ///   ramp promises not to do.
+    ///
+    /// Sorting removes both. The band widths now follow the session's own
+    /// composition rather than a fraction that has to be reconciled with it, and
+    /// there is nothing left over to misplace. Where supply matched the old
+    /// bands — a 20-question session holding 5 easy, 10 medium and 5 hard — the
+    /// output is identical to what the fixed positions produced.
+    ///
+    /// Difficulty is validated as `1...3` by `QuizQuestionStructureRules`, so
+    /// the three groups are exhaustive; anything outside that range cannot reach
+    /// a session. Deterministic under an injected generator, per QE-4.
     private func applyDifficultyProgression(to questions: [Question]) -> [Question] {
         let easy = questions.filter { $0.difficulty == 1 }.shuffled(using: &randomNumberGenerator)
         let medium = questions.filter { $0.difficulty == 2 }.shuffled(using: &randomNumberGenerator)
         let hard = questions.filter { $0.difficulty == 3 }.shuffled(using: &randomNumberGenerator)
+        let ordered = easy + medium + hard
 
-        var result: [Question] = []
-        var easyIndex = 0
-        var mediumIndex = 0
-        var hardIndex = 0
-
-        for position in 0..<questions.count {
-            let question: Question
-
-            if position < 5 {
-                question = getNextQuestion(
-                    preferred: easy, preferredIndex: &easyIndex,
-                    fallback1: medium, fallback1Index: &mediumIndex,
-                    fallback2: hard, fallback2Index: &hardIndex
-                )
-            } else if position < 15 {
-                question = getNextQuestion(
-                    preferred: medium, preferredIndex: &mediumIndex,
-                    fallback1: easy, fallback1Index: &easyIndex,
-                    fallback2: hard, fallback2Index: &hardIndex
-                )
-            } else {
-                question = getNextQuestion(
-                    preferred: hard, preferredIndex: &hardIndex,
-                    fallback1: medium, fallback1Index: &mediumIndex,
-                    fallback2: easy, fallback2Index: &easyIndex
-                )
-            }
-
-            result.append(question)
-        }
-
-        return result
-    }
-
-    private func getNextQuestion(
-        preferred: [Question], preferredIndex: inout Int,
-        fallback1: [Question], fallback1Index: inout Int,
-        fallback2: [Question], fallback2Index: inout Int
-    ) -> Question {
-        if preferredIndex < preferred.count {
-            defer { preferredIndex += 1 }
-            return preferred[preferredIndex]
-        } else if fallback1Index < fallback1.count {
-            defer { fallback1Index += 1 }
-            return fallback1[fallback1Index]
-        } else {
-            defer { fallback2Index += 1 }
-            return fallback2[fallback2Index]
-        }
+        // A question carrying a difficulty outside 1...3 would be dropped
+        // silently by the three filters above, turning a content defect into a
+        // shorter session nobody notices. Validation should have refused it
+        // long before here; if it somehow did not, return the session untouched
+        // rather than a lossy ordering of it.
+        guard ordered.count == questions.count else { return questions }
+        return ordered
     }
 }

@@ -24,6 +24,9 @@ let package = Package(
             dependencies: ["QuizEngineCore", "QuizEngineTestSupport"],
             resources: [
                 .process("Resources/alternate_questions.json"),
+                // 60 questions split evenly across the three difficulties, so an
+                // easy-to-hard ramp is measurable and distinguishable from a shuffle.
+                .process("Resources/difficulty_ramp_questions.json"),
                 // Historical persistence fixtures are copied verbatim, not processed.
                 // `.process` flattens the directory tree, and the four v0.1.x releases
                 // deliberately keep separate fixtures under identical file names, so
