@@ -15,7 +15,7 @@ Use the smallest product set your app needs:
 Add the public package at the exact validated release:
 
 ```swift
-.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.2")
+.package(url: "https://github.com/MPetrusic/QuizEngine.git", exact: "0.2.3")
 ```
 
 No repository credentials are required. Pin an exact release tag; do not use a moving branch as a production dependency.

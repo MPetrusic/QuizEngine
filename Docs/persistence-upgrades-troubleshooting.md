@@ -79,7 +79,7 @@ Power-up inventory is part of that complete target. Map each legacy hint to one 
 
 ## From StarterQuiz to your app
 
-1. Add the remote package at exact `0.2.2` and select only the products you need. Do not pin `0.2.0`; it loses multiplayer rewards on a failed terminal save.
+1. Add the remote package at exact `0.2.3` and select only the products you need. Do not pin `0.2.0`; it loses multiplayer rewards on a failed terminal save.
 2. Copy the composition pattern: one variant, one explicit question resource, one shared question service, one progress manager.
 3. Replace the starter categories, achievement IDs, strings, icons, question JSON, assets, bundle ID, and UI.
 4. Add content validation tests before release.
